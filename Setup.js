@@ -29,8 +29,8 @@ function setupSheetsAndConfig(){
       ]
     },
     {
-      name: 'Feriados', 
-      headers: ['fecha', 'motivo'] // Ej: 2025-12-25 | Navidad
+      name: 'DiasLibres',
+      headers: ['fecha', 'motivo'] // Días libres institucionales (adicionales a feriados oficiales)
     },
   ];
 
@@ -47,7 +47,6 @@ function setupSheetsAndConfig(){
       // Validación básica de encabezados existentes
       const current = sh.getRange(1, 1, 1, s.headers.length).getValues()[0];
       if (current.join() !== s.headers.join()) {
-        // En producción podrías decidir actualizar o no, aquí solo logueamos
         Logger.log('Aviso: Los encabezados de ' + s.name + ' pueden diferir.');
       }
     }
@@ -69,7 +68,11 @@ function populateDefaultConfig_(sheet){
     ['ADMIN_EMAILS', 'tu_correo@ejemplo.com', 'Correos admin general separados por ;'],
     ['MAIL_SENDER_NAME', 'Comedor Institucional', 'Nombre remitente correos'],
     ['APP_TITLE', 'Solicitud de Almuerzo', 'Título en la barra de navegación'],
-    ['FOOTER_SIGNATURE_ID', '', 'ID de la imagen de firma en Drive'],
+    ['FOOTER_SIGNATURE_ID', '1SZlRhijFMv0V0jDlqtagChmGDEzGTv3R', 'ID de la imagen de firma en Drive'],
+    ['BACKUP_FOLDER_ID', '', 'ID de carpeta Drive raíz para respaldos (Año/Mes/Semana)'],
+    ['TEST_EMAIL_MODE', 'FALSE', 'Si es TRUE, todos los correos van a la dirección de prueba'],
+    ['TEST_EMAIL_DEST', '', 'Correo de destino para modo de prueba'],
+    ['RESPONSIBLES_EMAILS_JSON', '{}', 'JSON mapeo Depto->Emails. Ej: {"Finanzas": "jefe@fin.com"}']
   ];
   sheet.getRange(2, 1, defaults.length, 3).setValues(defaults);
 }

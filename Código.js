@@ -1,15 +1,15 @@
 /**
- * Code.gs - Backend V4 (Final Consolidado)
+ * Code.gs - Backend V4 (Final Consolidado - Automatizado)
  */
-const APP_VERSION = 'v3.1-Stable';
+const APP_VERSION = 'v4.0-Auto';
 
 // === RUTAS E INICIO ===
 
 function doGet(e) {
   const t = HtmlService.createTemplateFromFile('index');
   const user = getUserInfo_();
-  
-  // Inyectar firma (versión optimizada)
+
+  // Inyectar firma
   t.signatureUrl = getSignatureDataUrl_();
 
   if (!user || user.estado !== 'ACTIVO') {
@@ -23,7 +23,7 @@ function doGet(e) {
 
   t.user = user;
   t.appVersion = APP_VERSION;
-  
+
   return t.evaluate()
     .setTitle('Solicitud Almuerzo')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
@@ -34,40 +34,33 @@ function include(filename) {
   return HtmlService.createHtmlOutputFromFile(filename).getContent();
 }
 
-// === API PÚBLICA (CLIENTE -> SERVIDOR) ===
+// === API PÚBLICA ===
 
 /**
- * Obtiene datos iniciales para la app.
- * Si `requestedDateStr` es nulo, calcula automáticamente el primer día disponible.
+ * Obtiene datos para la app.
+ * Devuelve TODAS las fechas futuras válidas con menú para permitir adelantado.
  */
 function apiGetInitData(requestedDateStr) {
   try {
     const user = getUserInfo_();
-    if (!user) throw new Error("Usuario no encontrado en la base de datos.");
+    if (!user) throw new Error("Usuario no encontrado.");
 
-    // 1. Calcular días disponibles (Filtrando hora de cierre y feriados)
-    const availableDates = getAvailableMenuDates_();
-    
-    // Si no hay menús futuros cargados o todos cerraron
+    // Obtener TODAS las fechas futuras válidas con menú
+    const availableDates = getAvailableMenuDates_(true); // true = fetchAll
+
     if (availableDates.length === 0) {
-      return { 
-        ok: true, 
-        empty: true, 
-        msg: "No hay menús disponibles para ordenar en este momento." 
-      };
+      return { ok: true, empty: true, msg: "No hay menús disponibles." };
     }
 
-    // 2. Determinar qué fecha mostrar (la pedida o la primera disponible)
+    // Fecha objetivo: la solicitada O la primera disponible (siguiente día hábil)
     let targetDateStr = requestedDateStr;
     if (!targetDateStr || !availableDates.some(d => d.value === targetDateStr)) {
       targetDateStr = availableDates[0].value;
     }
 
-    // 3. Cargar datos del contexto (Menú y Pedido de esa fecha)
     const existingOrder = getOrderByUserDate_(user.email, targetDateStr);
     const menu = getMenuByDate_(targetDateStr);
-    
-    // 4. Datos para Admin (si aplica)
+
     let adminSummary = null;
     if (user.rol === 'ADMIN_GEN' || user.rol === 'ADMIN_DEP') {
       adminSummary = getDepartmentStats_(targetDateStr, (user.rol === 'ADMIN_GEN' ? null : user.departamento));
@@ -76,8 +69,8 @@ function apiGetInitData(requestedDateStr) {
     return {
       ok: true,
       user: user,
-      currentDate: targetDateStr, // Fecha activa (YYYY-MM-DD)
-      dates: availableDates,      // Lista para las pestañas
+      currentDate: targetDateStr,
+      dates: availableDates,
       menu: menu,
       myOrder: existingOrder,
       adminData: adminSummary
@@ -88,25 +81,22 @@ function apiGetInitData(requestedDateStr) {
   }
 }
 
-/**
- * Recibe y guarda el pedido validando reglas de negocio y tiempos.
- */
 function apiSubmitOrder(payload) {
   try {
     const user = getUserInfo_();
-    const dateStr = payload.date; // Fecha objetivo
-    
-    // 1. Firewall de Tiempo: Validar que NO se haya cerrado el día mientras el usuario elegía
+    const dateStr = payload.date;
+
+    // 1. Validar Bloqueo Global (Hora de Cierre o Bloqueo explícito)
     if (!isDateOpenForOrdering_(dateStr)) {
       throw new Error("El tiempo límite para pedir el almuerzo de esta fecha ha expirado.");
     }
 
-    // 2. Firewall de Reglas: Validar combinaciones prohibidas
+    // 2. Validar Reglas de Menú
     validateOrderRules_(payload);
 
     // 3. Guardar
     saveOrderToSheet_(user, dateStr, payload);
-    
+
     return { ok: true };
 
   } catch (e) {
@@ -119,17 +109,13 @@ function apiCancelOrder(orderId) {
   const sh = ss.getSheetByName('Pedidos');
   const rows = sh.getDataRange().getValues();
   const user = getUserInfo_();
-  
+
   for (let i = 1; i < rows.length; i++) {
-    // Buscar por ID y Email (seguridad)
     if (String(rows[i][0]) === String(orderId) && String(rows[i][3]).toLowerCase() === user.email.toLowerCase()) {
-      
-      // Validar si aún es tiempo de cancelar (Regla de Cierre)
-      const orderDate = Utilities.formatDate(new Date(rows[i][2]), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+      const orderDate = formatDate_(new Date(rows[i][2]));
       if (!isDateOpenForOrdering_(orderDate)) {
-        return { ok: false, msg: "Ya no puedes cancelar este pedido porque la hora de cierre ha pasado." };
+        return { ok: false, msg: "Ya no puedes cancelar este pedido (hora de cierre pasada)." };
       }
-      
       sh.deleteRow(i + 1);
       return { ok: true };
     }
@@ -137,139 +123,370 @@ function apiCancelOrder(orderId) {
   return { ok: false, msg: "Pedido no encontrado." };
 }
 
-// === LÓGICA DE FECHAS Y CIERRE (CORE) ===
+// === AUTOMATIZACIÓN (TRIGGERS DIARIOS) ===
 
 /**
- * Devuelve lista de fechas futuras que tienen menú Y están abiertas para pedir.
+ * 1:00 PM: Recordatorios
  */
-function getAvailableMenuDates_() {
+function scheduledSendReminders() {
+  const nextBusinessDay = getNextBusinessDay_(new Date());
+  if (!nextBusinessDay) return; // No hay día hábil próximo configurado
+
+  const dateStr = formatDate_(nextBusinessDay);
+
+  // Lista de usuarios activos
   const ss = SpreadsheetApp.getActive();
-  const menuSh = ss.getSheetByName('Menu');
-  // Obtenemos solo las fechas del menú (columna B, índice 1)
-  const menuData = menuSh.getRange(2, 1, menuSh.getLastRow() - 1, 2).getValues(); 
-  
-  const now = new Date();
-  const todayStr = formatDate_(now);
-  
-  // Set de fechas únicas que existen en la hoja Menu (Hoy o Futuro)
-  const menuDatesSet = new Set();
-  menuData.forEach(r => {
-    const dStr = formatDate_(new Date(r[1]));
-    if (dStr >= todayStr) menuDatesSet.add(dStr); 
-  });
+  const uSh = ss.getSheetByName('Usuarios');
+  const uData = uSh.getDataRange().getValues();
+  const pSh = ss.getSheetByName('Pedidos');
+  const pData = pSh.getDataRange().getValues();
 
-  const validDates = [];
-  const holidays = getHolidaysSet_();
-  
-  // Revisamos si es tarde HOY para pedir para mañana
-  // (Esta lógica se delega a isDateOpenForOrdering_, pero preparamos el entorno)
-  
-  const sortedMenuDates = Array.from(menuDatesSet).sort();
+  // Set de emails que YA pidieron para esa fecha
+  const orderedEmails = new Set();
+  for (let i = 1; i < pData.length; i++) {
+    const rowDate = formatDate_(new Date(pData[i][2]));
+    if (rowDate === dateStr && pData[i][8] !== 'CANCELADO') {
+      orderedEmails.add(String(pData[i][3]).toLowerCase());
+    }
+  }
 
-  sortedMenuDates.forEach(dateStr => {
-    // Verificar si la fecha cumple con todas las reglas (Feriado, Finde, Hora Cierre)
-    if (isDateOpenForOrdering_(dateStr, holidays)) {
-      validDates.push({
-        value: dateStr,
-        label: formatDisplayDate_(dateStr)
-      });
+  // Recorrer usuarios y notificar
+  uData.slice(1).forEach(row => {
+    const email = String(row[0]).toLowerCase();
+    const estado = row[4];
+    const prefs = JSON.parse(row[5] || '{}');
+
+    // Solo activos, que NO han pedido, y que tienen recordatorios ON (default ON)
+    if (estado === 'ACTIVO' && !orderedEmails.has(email) && prefs.reminders !== false) {
+      sendEmail_(email, "Recordatorio de Almuerzo",
+        `Hola ${row[1]},<br><br>Aún no has realizado tu pedido de almuerzo para el <b>${formatDisplayDate_(dateStr)}</b>.<br>` +
+        `Recuerda que tienes hasta las ${getConfigValue_('HORA_CIERRE')} para hacerlo.<br><br>` +
+        `<a href="${ScriptApp.getService().getUrl()}">Ir a la App</a>`
+      );
     }
   });
-
-  return validDates;
 }
 
 /**
- * Verifica si una fecha de consumo es válida para pedir AHORA MISMO.
+ * 2:00 PM: Bloqueo de Hoja (Visual)
+ * En realidad el bloqueo lógico está en isDateOpenForOrdering_ basado en HORA_CIERRE.
+ * Esta función es simbólica o para protección de celdas si se usara Sheet UI.
+ * Como es Web App, solo aseguramos que HORA_CIERRE se respete.
  */
-function isDateOpenForOrdering_(targetDateStr, holidaysSet) {
-  if (!holidaysSet) holidaysSet = getHolidaysSet_();
-  
+function scheduledLockSheet() {
+  console.log("Bloqueo lógico activado por horario (HORA_CIERRE).");
+}
+
+/**
+ * 2:30 PM: Cierre, Respaldo y Limpieza
+ */
+function scheduledDailyClose() {
   const now = new Date();
-  const targetDate = new Date(targetDateStr + 'T12:00:00'); // Fijar mediodía para evitar problemas de timezone
-  
-  // 1. No se puede pedir para el pasado ni para hoy (según regla "siguiente día hábil")
-  if (targetDate <= now) return false;
+  const nextBusinessDay = getNextBusinessDay_(now);
+  if (!nextBusinessDay) return; // Nada que cerrar si no hay operación mañana?
 
-  // 2. Fin de semana (Sábado 6, Domingo 0) -> Cerrado
-  const day = targetDate.getDay();
-  if (day === 0 || day === 6) return false; 
+  // Nota: El cierre suele ser para el día siguiente.
+  // Ejemplo: Hoy Lunes 2:30 PM cierro pedidos para Martes.
+  const targetDateStr = formatDate_(nextBusinessDay);
 
-  // 3. Feriado -> Cerrado
-  if (holidaysSet.has(targetDateStr)) return false;
+  // 1. Generar Respaldo PDF/Excel de pedidos para targetDateStr
+  backupOrdersToDrive_(targetDateStr);
 
-  // 4. REGLA DEL CIERRE (2:30 PM)
-  // Para comer el Día X, el pedido debe hacerse antes de la HORA_CIERRE del "Día Previo Hábil".
-  
-  const prevBusinessDay = getPreviousBusinessDay_(targetDate, holidaysSet);
-  const prevDayStr = formatDate_(prevBusinessDay);
+  // 2. Enviar Resumen General a Admins
+  sendDailyAdminSummary_(targetDateStr);
+
+  // 3. Validar Integridad de Menú (Arroz Blanco) para días futuros
+  checkMenuIntegrity_();
+
+  // 4. Actualizar Encabezados Visuales (si se usa la hoja como referencia)
+  updateSheetHeaders_(targetDateStr);
+}
+
+/**
+ * 3:00 PM: Reportes por Departamento
+ */
+function scheduledDepartmentReports() {
+  const now = new Date();
+  const nextBusinessDay = getNextBusinessDay_(now);
+  if (!nextBusinessDay) return;
+
+  const dateStr = formatDate_(nextBusinessDay);
+
+  // Agrupar pedidos por departamento
+  const orders = getOrdersByDate_(dateStr);
+  const byDept = {};
+
+  orders.forEach(o => {
+    const dept = o.departamento || 'Sin Depto';
+    if (!byDept[dept]) byDept[dept] = [];
+    byDept[dept].push(o);
+  });
+
+  // Obtener mapeo de responsables
+  const rawMap = getConfigValue_('RESPONSIBLES_EMAILS_JSON');
+  let deptEmails = {};
+  try { deptEmails = JSON.parse(rawMap); } catch (e) {}
+
+  // Enviar correos
+  Object.keys(byDept).forEach(dept => {
+    const recipient = deptEmails[dept];
+    if (recipient) {
+      const listHtml = byDept[dept].map(o => `<li><b>${o.nombre}:</b> ${o.resumen}</li>`).join('');
+      sendEmail_(recipient, `Reporte Almuerzo ${dept} - ${dateStr}`,
+        `<h3>Pedidos para ${formatDisplayDate_(dateStr)}</h3>` +
+        `<p>Total platos: ${byDept[dept].length}</p>` +
+        `<ul>${listHtml}</ul>`
+      );
+    }
+  });
+}
+
+// === LÓGICA CORE (FECHAS Y MENÚ) ===
+
+/**
+ * Devuelve fechas futuras con menú disponible.
+ * @param {boolean} fetchAll Si es true, trae todas. Si false, solo las inmediatas.
+ */
+function getAvailableMenuDates_(fetchAll) {
+  const ss = SpreadsheetApp.getActive();
+  const menuSh = ss.getSheetByName('Menu');
+  const data = menuSh.getRange(2, 1, menuSh.getLastRow()-1, 2).getValues();
+
+  const now = new Date();
   const todayStr = formatDate_(now);
 
-  // Si HOY es el día previo hábil (ej. Hoy martes, quiero pedir para Miércoles)
-  if (todayStr === prevDayStr) {
-     const cutoffHourStr = getConfigValue_('HORA_CIERRE') || '14:30'; // Por defecto 2:30 PM
-     const [cutH, cutM] = cutoffHourStr.split(':').map(Number);
-     
-     const limitTime = new Date();
-     limitTime.setHours(cutH, cutM, 0, 0);
-     
-     // Si ahora es más tarde que el límite, CERRAMOS el pedido para esa fecha
-     if (now > limitTime) return false;
+  const datesSet = new Set();
+  data.forEach(r => {
+    const dStr = formatDate_(new Date(r[1]));
+    if (dStr >= todayStr) datesSet.add(dStr);
+  });
+
+  const sorted = Array.from(datesSet).sort();
+  const holidays = getHolidaysSet_();
+  const valid = [];
+
+  sorted.forEach(dStr => {
+    // Para "adelantar", permitimos pedir si la fecha es futura,
+    // AUNQUE hoy ya haya pasado la hora de cierre de "mañana".
+    // La regla de cierre es: "Para pedir para mañana, hazlo antes de hoy 2:30".
+    // Para pedir para pasado mañana, la hora de cierre es mañana 2:30.
+    // Por tanto, fechas > mañana siempre están abiertas hoy.
+
+    if (isDateOpenForOrdering_(dStr, holidays)) {
+      valid.push({ value: dStr, label: formatDisplayDate_(dStr) });
+    }
+  });
+
+  return valid;
+}
+
+function isDateOpenForOrdering_(targetDateStr, holidaysSet) {
+  if (!holidaysSet) holidaysSet = getHolidaysSet_();
+  const now = new Date();
+  const targetDate = new Date(targetDateStr + 'T12:00:00');
+
+  if (targetDate <= now) return false; // Pasado
+
+  const day = targetDate.getDay();
+  if (day === 0 || day === 6) return false; // Finde
+  if (holidaysSet.has(targetDateStr)) return false; // Feriado
+
+  // Regla Cierre: Pedir antes de HORA_CIERRE del día hábil previo.
+  const prevBizDay = getPreviousBusinessDay_(targetDate, holidaysSet);
+  const prevBizDayStr = formatDate_(prevBizDay);
+  const todayStr = formatDate_(now);
+
+  // Si hoy es el día previo (ej. pido para mañana)
+  if (todayStr === prevBizDayStr) {
+    const cutStr = getConfigValue_('HORA_CIERRE') || '14:30';
+    const [h, m] = cutStr.split(':');
+    const limit = new Date();
+    limit.setHours(h, m, 0, 0);
+    if (now > limit) return false;
   }
-  
-  // Si HOY es posterior al día previo hábil (ya pasó el día de pedir), cerrado.
-  // (Ej. Hoy es Jueves y quiero pedir para Miércoles -> Imposible, ya filtrado por fecha, 
-  // pero cubre casos raros de feriados intermedios).
+
+  // Si hoy es posterior al día previo (ya pasó el día de pedir)
   const zeroNow = new Date(now); zeroNow.setHours(0,0,0,0);
-  const zeroPrev = new Date(prevBusinessDay); zeroPrev.setHours(0,0,0,0);
-  
+  const zeroPrev = new Date(prevBizDay); zeroPrev.setHours(0,0,0,0);
   if (zeroNow > zeroPrev) return false;
 
   return true;
 }
 
-// === HELPERS DE NEGOCIO (VALIDACIONES) ===
+// === RESPALDOS Y HELPERS ===
 
-function validateOrderRules_(sel) {
-  const cats = sel.categorias || [];
-  const items = sel.items || []; // Nombres de los platos
-  
-  // 1. Platos Especiales Exclusivos
-  // (Vegetariana, Caldo, Opción Rápida no se mezclan con buffet normal)
-  const specialList = ['Vegetariana', 'Caldo', 'Opcion_Rapida'];
-  const hasSpecial = cats.some(c => specialList.includes(c));
-  
-  if (hasSpecial && cats.length > 1) {
-     // Si hay especial, todas las categorías deben ser especiales (o la misma)
-     // Ej: Se permite 2 caldos, pero no Caldo + Arroz
-     const uniqueCats = [...new Set(cats)];
-     if (uniqueCats.some(c => !specialList.includes(c))) {
-       throw new Error("Los platos especiales (Vegetariano, Caldo, Rápido) no se pueden combinar con el menú regular (Arroz, Carne, etc.).");
-     }
-  }
+function backupOrdersToDrive_(dateStr) {
+  const rootId = getConfigValue_('BACKUP_FOLDER_ID');
+  if (!rootId) return;
 
-  // 2. Regla Granos
-  // Si pides Granos, DEBES tener Arroz Blanco
-  if (cats.includes('Granos')) {
-    const hasWhiteRice = items.some(i => i.toLowerCase().includes('arroz blanco'));
-    if (!hasWhiteRice) {
-      throw new Error("Los granos requieren seleccionar Arroz Blanco.");
-    }
-  }
+  const ss = SpreadsheetApp.getActive();
+  const sh = ss.getSheetByName('Pedidos');
+  const data = sh.getDataRange().getValues();
 
-  // 3. Regla Arroz vs Víveres
-  if (cats.includes('Arroces') && cats.includes('Viveres')) {
-    throw new Error("No puedes seleccionar Arroz y Víveres en el mismo pedido.");
+  // Filtrar pedidos de la fecha
+  const filtered = data.filter((row, i) => i === 0 || formatDate_(new Date(row[2])) === dateStr);
+  if (filtered.length <= 1) return; // Solo header
+
+  try {
+    const rootFolder = DriveApp.getFolderById(rootId);
+    const d = new Date(dateStr + 'T12:00:00');
+    const year = String(d.getFullYear());
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+
+    // Estructura Año/Mes
+    let yFolder = rootFolder.getFoldersByName(year).hasNext() ? rootFolder.getFoldersByName(year).next() : rootFolder.createFolder(year);
+    let mFolder = yFolder.getFoldersByName(month).hasNext() ? yFolder.getFoldersByName(month).next() : yFolder.createFolder(month);
+
+    // Crear Spreadsheet temporal
+    const tempSheet = SpreadsheetApp.create(`Pedidos_${dateStr}`);
+    tempSheet.getSheets()[0].getRange(1, 1, filtered.length, filtered[0].length).setValues(filtered);
+    const tempFile = DriveApp.getFileById(tempSheet.getId());
+
+    // Mover a carpeta
+    tempFile.moveTo(mFolder);
+
+    // Generar PDF (básico)
+    const pdfBlob = tempFile.getAs('application/pdf');
+    mFolder.createFile(pdfBlob).setName(`Pedidos_${dateStr}.pdf`);
+
+    // Borrar temporal si se quiere solo PDF o dejar excel. La guía dice "PDF y Excel".
+    // Dejamos ambos.
+
+  } catch (e) {
+    console.error("Error backup: " + e.message);
   }
 }
 
-// === HELPERS DE DATOS (BASES DE DATOS) ===
+function sendDailyAdminSummary_(dateStr) {
+  const admins = getConfigValue_('ADMIN_EMAILS');
+  if (!admins) return;
+
+  const orders = getOrdersByDate_(dateStr);
+  const count = orders.length;
+
+  if (count > 0) {
+    sendEmail_(admins, `Resumen Pedidos ${dateStr}`,
+      `Se han registrado <b>${count}</b> pedidos para el día ${dateStr}.<br>` +
+      `El respaldo ha sido generado en Drive.`
+    );
+  }
+}
+
+function sendEmail_(to, subject, htmlBody) {
+  const testMode = getConfigValue_('TEST_EMAIL_MODE') === 'TRUE';
+  const testDest = getConfigValue_('TEST_EMAIL_DEST');
+  const senderName = getConfigValue_('MAIL_SENDER_NAME');
+
+  const recipient = testMode ? testDest : to;
+  if (!recipient) return;
+
+  const finalSubject = testMode ? `[TEST] ${subject}` : subject;
+
+  // Inyectar firma si existe
+  const sigUrl = getSignatureDataUrl_();
+  const signatureHtml = sigUrl ? `<br><br><img src="${sigUrl}" style="max-height:100px;">` : '';
+
+  MailApp.sendEmail({
+    to: recipient,
+    subject: finalSubject,
+    htmlBody: htmlBody + signatureHtml,
+    name: senderName
+  });
+}
+
+function checkMenuIntegrity_() {
+  const ss = SpreadsheetApp.getActive();
+  const mSh = ss.getSheetByName('Menu');
+  const data = mSh.getDataRange().getValues();
+
+  const datesToCheck = new Set();
+  const menuMap = {}; // { date: { hasRice: bool, id: ... } }
+
+  // Recolectar datos
+  for (let i = 1; i < data.length; i++) {
+    const dStr = formatDate_(new Date(data[i][1]));
+    const cat = data[i][2];
+    const item = String(data[i][3]).toLowerCase();
+
+    // Solo verificar futuro
+    if (dStr > formatDate_(new Date())) {
+      if (!menuMap[dStr]) menuMap[dStr] = { hasRice: false };
+
+      if (cat === 'Arroces' && item.includes('arroz blanco')) {
+        menuMap[dStr].hasRice = true;
+      }
+    }
+  }
+
+  // Verificar
+  const warnings = [];
+  Object.keys(menuMap).forEach(d => {
+    if (!menuMap[d].hasRice) {
+      warnings.push(d);
+    }
+  });
+
+  if (warnings.length > 0) {
+    const msg = `Advertencia: El menú para las siguientes fechas no incluye "Arroz Blanco" en la categoría Arroces: ${warnings.join(', ')}. Esto bloqueará la selección de Granos.`;
+    console.warn(msg);
+    // Notificar admin
+    const admins = getConfigValue_('ADMIN_EMAILS');
+    if (admins) sendEmail_(admins, "Alerta: Integridad de Menú", msg);
+  }
+}
+
+function updateSheetHeaders_(nextDateStr) {
+  // Actualiza textos visuales en las hojas para referencia de usuarios que entran directo al Sheet
+  const ss = SpreadsheetApp.getActive();
+
+  // 1. Hoja Solicitud (Pedidos)
+  // Nota: "Solicitud" en el prompt original se refiere a donde piden. Aquí es "Pedidos".
+  // Si existiera una hoja UI legacy llamada "Solicitud", la actualizaríamos.
+  // Como usamos "Pedidos" como DB, actualizaremos una celda de info si existe, o creamos un log.
+  // Asumiremos que el usuario podría ver la hoja Menu.
+
+  // 2. Hoja Menu
+  const mSh = ss.getSheetByName('Menu');
+  if (mSh) {
+    // Intentar poner un texto descriptivo en la fila 1 si hay espacio o en una celda libre
+    // El requerimiento dice: "Menú del [lunes] al [viernes]..."
+    // Calculamos inicio y fin de esa semana
+    const d = new Date(nextDateStr + 'T12:00:00');
+    const day = d.getDay(); // 0-6
+    const diffToMon = d.getDate() - day + (day == 0 ? -6 : 1); // adjust when day is sunday
+    const monday = new Date(d.setDate(diffToMon));
+    const friday = new Date(d.setDate(monday.getDate() + 4));
+
+    const text = `Menú de la semana: ${formatDate_(monday)} al ${formatDate_(friday)}`;
+    // Lo ponemos en una nota o celda A1 si es posible sin romper headers.
+    // Como A1 son headers, lo ponemos como Nota en A1.
+    mSh.getRange('A1').setNote(text);
+  }
+}
+
+// === DATA ACCESS HELPERS ===
+
+function getOrdersByDate_(dateStr) {
+  const sh = SpreadsheetApp.getActive().getSheetByName('Pedidos');
+  const data = sh.getDataRange().getValues();
+  const list = [];
+  for (let i = 1; i < data.length; i++) {
+    const rowDate = formatDate_(new Date(data[i][2]));
+    if (rowDate === dateStr && data[i][8] !== 'CANCELADO') {
+      list.push({
+        nombre: data[i][4],
+        departamento: data[i][5],
+        resumen: data[i][6]
+      });
+    }
+  }
+  return list;
+}
 
 function getUserInfo_() {
   const email = Session.getActiveUser().getEmail().toLowerCase();
   const sh = SpreadsheetApp.getActive().getSheetByName('Usuarios');
   const data = sh.getDataRange().getValues();
-  // Headers: email, nombre, departamento, rol, estado
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][0]).toLowerCase() === email) {
       return {
@@ -288,18 +505,12 @@ function getMenuByDate_(dateStr) {
   const sh = SpreadsheetApp.getActive().getSheetByName('Menu');
   const data = sh.getDataRange().getValues();
   const menu = {};
-  
   for (let i = 1; i < data.length; i++) {
     const rowDate = formatDate_(new Date(data[i][1]));
-    // Filtramos por fecha y que esté habilitado ('SI')
     if (rowDate === dateStr && String(data[i][5]).toUpperCase() === 'SI') {
       const cat = data[i][2];
       if (!menu[cat]) menu[cat] = [];
-      menu[cat].push({
-        id: data[i][0],
-        plato: data[i][3],
-        desc: data[i][4]
-      });
+      menu[cat].push({ id: data[i][0], plato: data[i][3], desc: data[i][4] });
     }
   }
   return menu;
@@ -308,15 +519,10 @@ function getMenuByDate_(dateStr) {
 function getOrderByUserDate_(email, dateStr) {
   const sh = SpreadsheetApp.getActive().getSheetByName('Pedidos');
   const data = sh.getDataRange().getValues();
-  // Buscamos de abajo hacia arriba (último pedido válido)
   for (let i = data.length - 1; i >= 1; i--) {
-    const rowDate = formatDate_(new Date(data[i][2])); // Col C: Fecha Consumo
+    const rowDate = formatDate_(new Date(data[i][2]));
     if (rowDate === dateStr && String(data[i][3]).toLowerCase() === email) {
-      return {
-        id: data[i][0],
-        resumen: data[i][6],
-        detalle: JSON.parse(data[i][7] || '{}')
-      };
+      return { id: data[i][0], resumen: data[i][6], detalle: JSON.parse(data[i][7] || '{}') };
     }
   }
   return null;
@@ -326,8 +532,6 @@ function saveOrderToSheet_(user, dateStr, selection) {
   const sh = SpreadsheetApp.getActive().getSheetByName('Pedidos');
   const data = sh.getDataRange().getValues();
   let rowIdx = -1;
-  
-  // Buscar si ya existe pedido para esa fecha/usuario para sobrescribir
   for (let i = 1; i < data.length; i++) {
     const rowDate = formatDate_(new Date(data[i][2]));
     if (rowDate === dateStr && String(data[i][3]).toLowerCase() === user.email) {
@@ -335,24 +539,12 @@ function saveOrderToSheet_(user, dateStr, selection) {
       break;
     }
   }
-
   const id = rowIdx > 0 ? data[rowIdx - 1][0] : Utilities.getUuid();
   const now = new Date();
-  
-  // Headers: id, fecha_solicitud, fecha_consumo, email, nombre, depto, resumen, json, estado, timestamp
   const rowData = [
-    id, 
-    now, 
-    dateStr, 
-    user.email, 
-    user.nombre, 
-    user.departamento, 
-    selection.items.join(', '), 
-    JSON.stringify(selection), 
-    'ACTIVO', 
-    now
+    id, now, dateStr, user.email, user.nombre, user.departamento,
+    selection.items.join(', '), JSON.stringify(selection), 'ACTIVO', now
   ];
-
   if (rowIdx > 0) {
     sh.getRange(rowIdx, 1, 1, rowData.length).setValues([rowData]);
   } else {
@@ -361,30 +553,38 @@ function saveOrderToSheet_(user, dateStr, selection) {
 }
 
 function getDepartmentStats_(dateStr, deptFilter) {
-  const sh = SpreadsheetApp.getActive().getSheetByName('Pedidos');
-  const data = sh.getDataRange().getValues();
+  const orders = getOrdersByDate_(dateStr);
   const stats = { total: 0, byUser: [] };
-  
-  for (let i = 1; i < data.length; i++) {
-    const rowDate = formatDate_(new Date(data[i][2]));
-    const rowDept = data[i][5]; // Col F
-    
-    if (rowDate === dateStr) {
-      // Si es Admin Gen (filter null) o coincide depto
-      if (!deptFilter || rowDept === deptFilter) {
-        stats.total++;
-        stats.byUser.push({
-          nombre: data[i][4],
-          pedido: data[i][6],
-          depto: rowDept
-        });
-      }
+  orders.forEach(o => {
+    if (!deptFilter || o.departamento === deptFilter) {
+      stats.total++;
+      stats.byUser.push({ nombre: o.nombre, pedido: o.resumen, depto: o.departamento });
     }
-  }
+  });
   return stats;
 }
 
-// === UTILS (CONFIG, FECHAS, HELPERS) ===
+function validateOrderRules_(sel) {
+  const cats = sel.categorias || [];
+  const items = sel.items || [];
+  const specialList = ['Vegetariana', 'Caldo', 'Opcion_Rapida'];
+  const hasSpecial = cats.some(c => specialList.includes(c));
+  if (hasSpecial && cats.length > 1) {
+     const uniqueCats = [...new Set(cats)];
+     if (uniqueCats.some(c => !specialList.includes(c))) {
+       throw new Error("Platos especiales no se pueden combinar con el menú regular.");
+     }
+  }
+  if (cats.includes('Granos')) {
+    const hasWhiteRice = items.some(i => i.toLowerCase().includes('arroz blanco'));
+    if (!hasWhiteRice) throw new Error("Los granos requieren seleccionar Arroz Blanco.");
+  }
+  if (cats.includes('Arroces') && cats.includes('Viveres')) {
+    throw new Error("No puedes combinar Arroz y Víveres.");
+  }
+}
+
+// === UTILS ===
 
 function getConfigValue_(key) {
   const sh = SpreadsheetApp.getActive().getSheetByName('Config');
@@ -396,23 +596,38 @@ function getConfigValue_(key) {
 }
 
 function getHolidaysSet_() {
-  const ss = SpreadsheetApp.getActive();
-  const sh = ss.getSheetByName('Feriados');
-  if (!sh) return new Set();
-  const data = sh.getRange(2, 1, sh.getLastRow(), 1).getValues();
   const set = new Set();
-  data.forEach(r => {
-    if (r[0]) set.add(formatDate_(new Date(r[0])));
-  });
+  const ss = SpreadsheetApp.getActive();
+  const sh = ss.getSheetByName('DiasLibres');
+  if (sh) {
+    sh.getRange(2, 1, sh.getLastRow(), 1).getValues().forEach(r => {
+      if (r[0]) set.add(formatDate_(new Date(r[0])));
+    });
+  }
+  try {
+    const calId = 'es.do#holiday@group.v.calendar.google.com';
+    const now = new Date();
+    const start = new Date(now.getTime() - 30 * 86400000);
+    const end = new Date(now.getTime() + 365 * 86400000);
+    CalendarApp.getCalendarById(calId).getEvents(start, end).forEach(e => set.add(formatDate_(e.getStartTime())));
+  } catch (e) {}
   return set;
+}
+
+function getNextBusinessDay_(date) {
+  let d = new Date(date);
+  d.setDate(d.getDate() + 1);
+  const holidays = getHolidaysSet_();
+  while (d.getDay() === 0 || d.getDay() === 6 || holidays.has(formatDate_(d))) {
+    d.setDate(d.getDate() + 1);
+  }
+  return d;
 }
 
 function getPreviousBusinessDay_(date, holidaysSet) {
   let d = new Date(date);
-  // Retroceder 1 día hasta encontrar uno que NO sea finde ni feriado
-  do {
-    d.setDate(d.getDate() - 1);
-  } while (d.getDay() === 0 || d.getDay() === 6 || holidaysSet.has(formatDate_(d)));
+  do { d.setDate(d.getDate() - 1); }
+  while (d.getDay() === 0 || d.getDay() === 6 || holidaysSet.has(formatDate_(d)));
   return d;
 }
 
@@ -421,63 +636,25 @@ function formatDate_(date) {
 }
 
 function formatDisplayDate_(dateStr) {
-  // Formato amigable: "Jueves 28/11"
-  // Usamos T12:00:00 para evitar saltos de fecha por zona horaria
   const d = new Date(dateStr + 'T12:00:00');
   const days = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
   return `${days[d.getDay()]} ${d.getDate()}/${d.getMonth() + 1}`;
 }
 
-// === IMAGEN / FIRMA (OPTIMIZADA Y DEBUGGEADA) ===
-
 function getSignatureDataUrl_() {
   const cache = CacheService.getScriptCache();
-  const cacheKey = 'SIG_V3_PROD'; 
-  
-  const cached = cache.get(cacheKey);
+  const cached = cache.get('SIG_V3_PROD');
   if (cached) return cached;
-
   const fileId = getConfigValue_('FOOTER_SIGNATURE_ID');
   if (!fileId) return '';
-
-  try {
-    const blob = getDriveThumbnailBlob_(fileId, 300);
-    if (!blob) return ''; // Silencioso si falla
-
-    const b64 = Utilities.base64Encode(blob.getBytes());
-    const mime = blob.getContentType() || 'image/png';
-    const dataUrl = 'data:' + mime + ';base64,' + b64;
-    
-    try { cache.put(cacheKey, dataUrl, 21600); } catch (e) {}
-
-    return dataUrl; 
-  } catch (e) {
-    console.error('Error firma: ' + e.message);
-    return '';
-  }
-}
-
-function getDriveThumbnailBlob_(fileId, size) {
   try {
     const file = Drive.Files.get(fileId, { fields: 'thumbnailLink' });
-    let url = file && file.thumbnailLink;
-    if (!url) return null;
-    
-    url = url.replace(/=s\d+$/, '=s' + Math.max(32, size || 300));
-    
-    const resp = UrlFetchApp.fetch(url, { 
-      headers: { 'Authorization': 'Bearer ' + ScriptApp.getOAuthToken() },
-      muteHttpExceptions: true 
-    });
-    
-    if (resp.getResponseCode() !== 200) return null;
-    
-    const blob = resp.getBlob();
-    const type = blob.getContentType();
-    return type.startsWith('image/') ? (type.match(/png|jpeg|jpg/) ? blob : blob.setContentType('image/png')) : null;
-    
-  } catch (e) {
-    console.warn('Error getDriveThumbnailBlob_: ' + e.message);
-    return null;
-  }
+    if (!file || !file.thumbnailLink) return '';
+    const url = file.thumbnailLink.replace(/=s\d+$/, '=s300');
+    const blob = UrlFetchApp.fetch(url, { headers: { 'Authorization': 'Bearer ' + ScriptApp.getOAuthToken() } }).getBlob();
+    const b64 = Utilities.base64Encode(blob.getBytes());
+    const dataUrl = 'data:image/png;base64,' + b64;
+    cache.put('SIG_V3_PROD', dataUrl, 21600);
+    return dataUrl;
+  } catch (e) { return ''; }
 }
