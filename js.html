@@ -1,0 +1,270 @@
+<script>
+const { createApp, ref, computed, onMounted, reactive } = Vue;
+
+createApp({
+  setup() {
+    // === ESTADO (STATE) ===
+    const loading = ref(true);
+    const submitting = ref(false);
+    
+    // Datos del usuario y app
+    const user = ref({});
+    const menu = ref({});
+    const myOrder = ref(null);
+    const adminData = ref(null);
+    
+    // Manejo de Fechas (Nuevo)
+    const currentDate = ref(''); // Fecha seleccionada actualmente (YYYY-MM-DD)
+    const dates = ref([]);       // Lista de fechas disponibles (tabs)
+    
+    // Formulario
+    const comments = ref('');
+    const selection = reactive(new Set()); // IDs seleccionados
+    const selectionData = reactive({});    // Metadatos de lo seleccionado {id: {cat, plato}}
+
+    // === COMPUTED PROPERTIES ===
+    const isAdmin = computed(() => user.value.rol && ['ADMIN_GEN', 'ADMIN_DEP'].includes(user.value.rol));
+    const isAdminGen = computed(() => user.value.rol === 'ADMIN_GEN');
+    
+    const menuLoaded = computed(() => menu.value && Object.keys(menu.value).length > 0);
+    
+    // Orden de categorías para mostrar (puedes ajustar el orden aquí)
+    const categoryOrder = ['Arroces', 'Granos', 'Carnes', 'Ensaladas', 'Viveres', 'Vegetariana', 'Caldo', 'Opcion_Rapida'];
+    const categories = computed(() => {
+      if (!menu.value) return [];
+      const cats = Object.keys(menu.value);
+      // Ordenar según la lista predefinida, los que no estén van al final
+      return cats.sort((a, b) => {
+        const idxA = categoryOrder.indexOf(a);
+        const idxB = categoryOrder.indexOf(b);
+        return (idxA === -1 ? 999 : idxA) - (idxB === -1 ? 999 : idxB);
+      });
+    });
+    
+    const selectedCount = computed(() => selection.size);
+
+    // === REGLAS DE NEGOCIO (VALIDACIONES) ===
+    const specialCats = ['Vegetariana', 'Caldo', 'Opcion_Rapida'];
+    // exclusionCats: Categorías que no pueden mezclarse entre sí
+    // Nota: En el requerimiento original Arroces no va con Víveres.
+    
+    // Helper: Array de categorías seleccionadas actualmente
+    const selectedCats = computed(() => {
+      const cats = new Set();
+      selection.forEach(id => {
+        if(selectionData[id]) cats.add(selectionData[id].cat);
+      });
+      return Array.from(cats);
+    });
+
+    const isSpecialSelected = computed(() => {
+      return selectedCats.value.some(c => specialCats.includes(c));
+    });
+
+    // Validar si una categoría entera debe bloquearse (gris)
+    const isCatDisabled = (cat) => {
+      // 1. Si elegí un especial, bloqueo todo lo que NO sea esa misma categoría especial
+      if (isSpecialSelected.value) {
+        // Si la categoría actual ES la especial seleccionada, no la bloqueo
+        if (selectedCats.value.includes(cat)) return false;
+        // Cualquier otra cosa, bloqueada
+        return true;
+      }
+
+      // 2. Regla Arroz vs Viveres (Mutuamente exclusivos)
+      if (cat === 'Arroces' && selectedCats.value.includes('Viveres')) return true;
+      if (cat === 'Viveres' && selectedCats.value.includes('Arroces')) return true;
+
+      // 3. Si elegí algo "Regular" (Arroz, Carne, etc.), bloqueo los "Especiales"
+      if (selectedCount.value > 0 && specialCats.includes(cat)) return true;
+
+      return false;
+    };
+
+    // Validar items específicos (por ahora igual a categoría)
+    const isItemDisabled = (cat) => isCatDisabled(cat);
+
+    // Warnings específicos
+    const showGrainWarning = computed(() => {
+      // Si seleccionó Granos
+      if (!selectedCats.value.includes('Granos')) return false;
+      
+      // Verificar si hay algún plato que contenga "Arroz Blanco" (case insensitive)
+      let hasWhiteRice = false;
+      selection.forEach(id => {
+        const item = selectionData[id];
+        if (item && item.cat === 'Arroces' && item.plato.toLowerCase().includes('arroz blanco')) {
+          hasWhiteRice = true;
+        }
+      });
+      return !hasWhiteRice; // Muestra warning si NO hay arroz blanco
+    });
+
+    const validationError = computed(() => {
+      if (selectedCount.value === 0) return null;
+      if (showGrainWarning.value) return "Debes seleccionar Arroz Blanco para acompañar los granos.";
+      return null;
+    });
+
+    const hasBlockingErrors = computed(() => {
+      return selectedCount.value === 0 || validationError.value !== null;
+    });
+
+    // === ACCIONES (ACTIONS) ===
+
+    const loadData = (targetDate = null) => {
+      loading.value = true;
+      // Limpiamos selección al cambiar de día o recargar
+      selection.clear();
+      for (const prop of Object.getOwnPropertyNames(selectionData)) {
+        delete selectionData[prop];
+      }
+      comments.value = '';
+
+      google.script.run
+        .withSuccessHandler(res => {
+          loading.value = false;
+          if (res.ok) {
+            // Caso: No hay fechas futuras disponibles
+            if (res.empty) {
+              dates.value = [];
+              menu.value = {};
+              return;
+            }
+            // Cargar datos
+            user.value = res.user;
+            menu.value = res.menu;
+            myOrder.value = res.myOrder;
+            adminData.value = res.adminData;
+            
+            // Actualizar estado de fechas
+            currentDate.value = res.currentDate;
+            dates.value = res.dates;
+          } else {
+            alert("Error cargando datos: " + res.msg);
+          }
+        })
+        .withFailureHandler(err => {
+          loading.value = false;
+          alert("Error de conexión con el servidor.");
+        })
+        .apiGetInitData(targetDate); // Pasamos la fecha si el usuario hizo clic en un tab
+    };
+
+    // Cambiar de fecha (Tabs superiores)
+    const changeDate = (dateStr) => {
+      if (dateStr === currentDate.value) return; // No recargar si es la misma
+      loadData(dateStr);
+    };
+
+    const toggleItem = (cat, item) => {
+      // Si la categoría está deshabilitada y el ítem NO está seleccionado, no hacer nada
+      if (isCatDisabled(cat) && !selection.has(item.id)) return;
+
+      if (selection.has(item.id)) {
+        // Deseleccionar
+        selection.delete(item.id);
+        delete selectionData[item.id];
+      } else {
+        // Seleccionar
+        // Si es categoría especial, asegurar limpieza de cualquier residuo (doble check)
+        if (specialCats.includes(cat)) {
+           // Podrías limpiar todo antes si quieres comportamiento estricto de radio button
+           // selection.clear(); 
+        }
+        selection.add(item.id);
+        selectionData[item.id] = { cat, plato: item.plato };
+      }
+    };
+
+    const submitOrder = () => {
+      if (hasBlockingErrors.value) return;
+      
+      submitting.value = true;
+      
+      // Preparamos el objeto para enviar
+      const payload = {
+        date: currentDate.value, // FECHA SELECCIONADA
+        categorias: Array.from(selection).map(id => selectionData[id].cat),
+        items: Array.from(selection).map(id => selectionData[id].plato),
+        detalleIds: Array.from(selection),
+        comentarios: comments.value
+      };
+
+      google.script.run
+        .withSuccessHandler(res => {
+          submitting.value = false;
+          if (res.ok) {
+            // Recargar la misma fecha para ver la confirmación
+            loadData(currentDate.value); 
+          } else {
+            alert("Error: " + res.msg);
+          }
+        })
+        .withFailureHandler(() => {
+          submitting.value = false;
+          alert("Error enviando el pedido. Intenta nuevamente.");
+        })
+        .apiSubmitOrder(payload);
+    };
+
+    const cancelOrder = () => {
+      if (!myOrder.value) return;
+      if (!confirm("¿Estás seguro de cancelar este pedido?")) return;
+      
+      loading.value = true;
+      google.script.run
+        .withSuccessHandler(res => {
+           if (res.ok) {
+             // Al cancelar, recargamos datos de la fecha actual
+             loadData(currentDate.value);
+           } else {
+             alert(res.msg);
+             loading.value = false;
+           }
+        })
+        .withFailureHandler(() => {
+          loading.value = false;
+          alert("Error al cancelar.");
+        })
+        .apiCancelOrder(myOrder.value.id);
+    };
+
+    // UI Helpers
+    const formatCatName = (c) => c.replace(/_/g, ' ');
+    
+    const hasSelectionInCat = (cat) => selectedCats.value.includes(cat);
+    
+    const isSelected = (id) => selection.has(id);
+    
+    const scrollToCat = (cat) => {
+      const el = document.getElementById('cat-'+cat);
+      if(el) el.scrollIntoView({behavior: 'smooth', block: 'start'});
+    };
+
+    // Inicialización
+    onMounted(() => {
+      loadData(); // Carga inicial sin fecha (el servidor decide la primera disponible)
+    });
+
+    return {
+      // Estado
+      loading, submitting, user, menu, myOrder, adminData, 
+      currentDate, dates, comments,
+      
+      // Computed
+      isAdmin, isAdminGen, menuLoaded, categories,
+      selectedCount, validationError, hasBlockingErrors, showGrainWarning,
+      
+      // Métodos / Reglas UI
+      toggleItem, isSelected, hasSelectionInCat, isCatDisabled, isItemDisabled,
+      
+      // Acciones Principales
+      changeDate, submitOrder, cancelOrder,
+      
+      // UI Utils
+      formatCatName, scrollToCat
+    };
+  }
+}).mount('#app');
+</script>
