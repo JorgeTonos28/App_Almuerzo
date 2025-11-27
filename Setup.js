@@ -68,8 +68,7 @@ function populateDefaultConfig_(sheet){
     ['ADMIN_EMAILS', 'tu_correo@ejemplo.com', 'Correos admin general separados por ;'],
     ['MAIL_SENDER_NAME', 'Comedor Institucional', 'Nombre remitente correos'],
     ['APP_TITLE', 'Solicitud de Almuerzo', 'Título en la barra de navegación'],
-    ['FOOTER_SIGNATURE_ID', '', 'ID de la imagen de firma en Drive'],
-    // Nuevas claves para automatización y respaldos
+    ['FOOTER_SIGNATURE_ID', '1SZlRhijFMv0V0jDlqtagChmGDEzGTv3R', 'ID de la imagen de firma en Drive'],
     ['BACKUP_FOLDER_ID', '', 'ID de carpeta Drive raíz para respaldos (Año/Mes/Semana)'],
     ['TEST_EMAIL_MODE', 'FALSE', 'Si es TRUE, todos los correos van a la dirección de prueba'],
     ['TEST_EMAIL_DEST', '', 'Correo de destino para modo de prueba'],
