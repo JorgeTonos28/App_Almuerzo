@@ -43,6 +43,17 @@ createApp({
     
     const selectedCount = computed(() => selection.size);
 
+    const displayDate = computed(() => {
+      const d = dates.value.find(x => x.value === currentDate.value);
+      return d ? d.label : currentDate.value;
+    });
+
+    const isCutoffPassed = computed(() => {
+      if (!currentDate.value) return true;
+      if (dates.value.length === 0) return true;
+      return !dates.value.some(d => d.value === currentDate.value);
+    });
+
     // === REGLAS DE NEGOCIO (VALIDACIONES) ===
     const specialCats = ['Vegetariana', 'Caldo', 'Opcion_Rapida'];
     // exclusionCats: Categorías que no pueden mezclarse entre sí
@@ -255,6 +266,7 @@ createApp({
       // Computed
       isAdmin, isAdminGen, menuLoaded, categories,
       selectedCount, validationError, hasBlockingErrors, showGrainWarning,
+      displayDate, isCutoffPassed,
       
       // Métodos / Reglas UI
       toggleItem, isSelected, hasSelectionInCat, isCatDisabled, isItemDisabled,
