@@ -29,8 +29,8 @@ function setupSheetsAndConfig(){
       ]
     },
     {
-      name: 'Feriados', 
-      headers: ['fecha', 'motivo'] // Ej: 2025-12-25 | Navidad
+      name: 'DiasLibres',
+      headers: ['fecha', 'motivo'] // Días libres institucionales (adicionales a feriados oficiales)
     },
   ];
 
