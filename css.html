@@ -1,0 +1,28 @@
+<style>
+  /* Personalización extra sobre Tailwind */
+  body {
+    -webkit-tap-highlight-color: transparent;
+  }
+  
+  /* Scrollbar oculta para pestañas horizontales */
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  /* Ajuste para iOS en el footer */
+  .safe-area-pb {
+    padding-bottom: env(safe-area-inset-bottom, 1rem);
+  }
+
+  /* Animaciones suaves */
+  .fade-enter-active, .fade-leave-active {
+    transition: opacity 0.3s ease;
+  }
+  .fade-enter-from, .fade-leave-to {
+    opacity: 0;
+  }
+</style>
