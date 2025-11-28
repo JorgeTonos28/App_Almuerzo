@@ -14,10 +14,19 @@
     
     <header class="bg-blue-700 text-white shadow-md sticky top-0 z-50">
       <div class="max-w-4xl mx-auto px-4 h-14 flex items-center justify-between">
-        <div class="font-bold text-lg"><i class="fa-solid fa-utensils mr-2"></i>Almuerzo Preempacado</div>
-        <div class="text-xs text-blue-100 flex flex-col items-end">
-          <span class="font-semibold">{{ user.nombre }}</span>
-          <span>{{ user.departamento }}</span>
+        <div class="font-bold text-lg flex items-center gap-2">
+           <i class="fa-solid fa-utensils"></i>
+           <span class="hidden sm:inline">Almuerzo Preempacado</span>
+           <span class="sm:hidden">Almuerzo</span>
+        </div>
+        <div class="flex items-center gap-4">
+           <button @click="toggleReminders" class="text-blue-200 hover:text-white transition-colors" :title="remindersEnabled ? 'Desactivar notificaciones' : 'Activar notificaciones'">
+             <i :class="['fa-solid text-lg', remindersEnabled ? 'fa-bell' : 'fa-bell-slash']"></i>
+           </button>
+           <div class="text-xs text-blue-100 flex flex-col items-end">
+             <span class="font-semibold">{{ user.nombre }}</span>
+             <span>{{ user.departamento }}</span>
+           </div>
         </div>
       </div>
     </header>
@@ -29,6 +38,14 @@
 
     <main class="flex-grow max-w-4xl mx-auto w-full p-4 space-y-6">
       
+      <div v-if="showMultiDayBanner" class="bg-indigo-50 border-l-4 border-indigo-500 p-4 rounded-r shadow-sm flex justify-between items-start animate-fade-in">
+        <div class="text-indigo-800 text-sm">
+          <p class="font-bold mb-1"><i class="fa-solid fa-circle-info mr-1"></i> ¡Nuevo!</p>
+          <p>Ahora puedes adelantar tus pedidos para todos los días disponibles. Navega por las fechas arriba.</p>
+        </div>
+        <button @click="dismissBanner" class="text-indigo-400 hover:text-indigo-600"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+
       <div v-if="dates.length > 0" class="flex overflow-x-auto pb-2 gap-2 no-scrollbar">
         <button v-for="d in dates" :key="d.value"
           @click="changeDate(d.value)"
@@ -163,12 +180,17 @@
         </div>
       </div>
     </main>
-    <footer class="mt-auto py-6 px-4 text-right">
-      <? if (signatureUrl) { ?>
-        <div class="inline-block opacity-80 hover:opacity-100 transition-opacity">
-          <img src="<?!= signatureUrl ?>" alt="Sello Digital" class="h-10 w-auto ml-auto object-contain" />
+    <footer class="mt-auto py-8 border-t bg-gray-50">
+      <div class="max-w-4xl mx-auto px-4 relative flex items-center justify-center">
+        <? if (signatureUrl) { ?>
+          <div class="absolute left-4 bottom-0 top-0 flex items-center">
+            <img src="<?!= signatureUrl ?>" alt="Sello" class="h-12 w-auto object-contain opacity-75 hover:opacity-100 transition-opacity" />
+          </div>
+        <? } ?>
+        <div class="text-center text-xs text-gray-400 font-semibold tracking-wide uppercase">
+           Dirección de Innovación - 2025
         </div>
-      <? } ?>
+      </div>
     </footer>
   </div>
   <?!= include('js'); ?>
