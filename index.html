@@ -46,6 +46,36 @@
         <button @click="dismissBanner" class="text-indigo-400 hover:text-indigo-600"><i class="fa-solid fa-xmark"></i></button>
       </div>
 
+      <!-- User Weekly Summary Table -->
+      <div v-if="userWeeklySummary.length > 0" class="bg-white rounded-xl shadow-sm border overflow-hidden animate-fade-in">
+        <div class="px-4 py-3 bg-gray-50 border-b flex justify-between items-center">
+             <h3 class="font-bold text-gray-700 text-sm"><i class="fa-solid fa-list-check mr-2 text-blue-600"></i> Mis Pedidos de la Semana</h3>
+        </div>
+        <div class="overflow-x-auto">
+           <div class="max-h-60 overflow-y-auto">
+             <table class="w-full text-sm text-left border-collapse">
+                <thead class="sticky top-0 bg-gray-100 font-bold text-gray-600 shadow-sm z-10">
+                   <tr>
+                      <th class="p-3 whitespace-nowrap bg-gray-100 sticky left-0 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">Día</th>
+                      <th v-for="h in summaryHeaders" :key="h" class="p-3 whitespace-nowrap bg-gray-100">{{ formatCatName(h) }}</th>
+                   </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                   <tr v-for="row in userWeeklySummary" :key="row.date" class="hover:bg-gray-50 transition-colors">
+                      <td class="p-3 font-medium text-gray-800 whitespace-nowrap sticky left-0 bg-white z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">{{ row.label }}</td>
+                      <td v-for="h in summaryHeaders" :key="h" class="p-3 min-w-[140px]">
+                         <div v-if="row.items[h]" class="text-xs font-medium text-blue-800 bg-blue-50 px-2 py-1 rounded inline-block leading-tight">
+                            {{ row.items[h] }}
+                         </div>
+                         <span v-else class="text-gray-300 text-xs">-</span>
+                      </td>
+                   </tr>
+                </tbody>
+             </table>
+           </div>
+        </div>
+      </div>
+
       <div v-if="dates.length > 0" class="flex overflow-x-auto pb-2 gap-2 no-scrollbar">
         <button v-for="d in dates" :key="d.value"
           @click="changeDate(d.value)"
@@ -138,7 +168,7 @@
                    @click="toggleItem(cat, item)"
                    :class="['relative p-3 rounded-xl border-2 transition-all cursor-pointer flex justify-between items-start',
                      isSelected(item.id) ? 'border-blue-500 bg-blue-50' : 'border-gray-100 hover:border-blue-200 bg-white',
-                     isItemDisabled(cat) ? 'opacity-50 pointer-events-none grayscale' : ''
+                     isItemDisabled(cat, item) ? 'opacity-50 pointer-events-none grayscale' : ''
                    ]">
                 <div>
                   <div class="font-medium text-gray-900">{{ item.plato }}</div>
