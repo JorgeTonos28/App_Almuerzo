@@ -1,7 +1,7 @@
 /**
  * Code.gs - Backend V4 (Final Consolidado - Automatizado)
  */
-const APP_VERSION = 'v4.1-Optimized';
+const APP_VERSION = 'v4.2-Features';
 
 // === RUTAS E INICIO ===
 
@@ -58,20 +58,30 @@ function apiGetInitData(requestedDateStr) {
       targetDateStr = availableDates[0].value;
     }
 
-    const existingOrder = getOrderByUserDate_(user.email, targetDateStr);
-    const menu = getMenuByDate_(targetDateStr);
+    // Optimization: Fetch ALL menus and orders
+    const allMenus = getAllMenus_(availableDates);
+    const allOrders = getAllUserOrders_(user.email, availableDates);
+
+    const menu = allMenus[targetDateStr] || {};
+    const existingOrder = allOrders[targetDateStr] || null;
 
     let adminSummary = null;
     if (user.rol === 'ADMIN_GEN' || user.rol === 'ADMIN_DEP') {
       adminSummary = getDepartmentStats_(targetDateStr, (user.rol === 'ADMIN_GEN' ? null : user.departamento));
     }
 
+    // User preferences
+    const prefs = getUserPrefs_(user.email);
+
     return {
       ok: true,
       user: user,
+      userPrefs: prefs,
       currentDate: targetDateStr,
       dates: availableDates,
       menu: menu,
+      allMenus: allMenus,
+      allOrders: allOrders,
       myOrder: existingOrder,
       adminData: adminSummary
     };
@@ -121,6 +131,26 @@ function apiCancelOrder(orderId) {
     }
   }
   return { ok: false, msg: "Pedido no encontrado." };
+}
+
+function apiSetUserPreference(key, value) {
+  try {
+    const userEmail = Session.getActiveUser().getEmail().toLowerCase();
+    const sh = SpreadsheetApp.getActive().getSheetByName('Usuarios');
+    const data = sh.getDataRange().getValues();
+
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][0]).toLowerCase() === userEmail) {
+        const currentPrefs = JSON.parse(data[i][5] || '{}');
+        currentPrefs[key] = value;
+        sh.getRange(i + 1, 6).setValue(JSON.stringify(currentPrefs));
+        return { ok: true };
+      }
+    }
+    return { ok: false, msg: "Usuario no encontrado" };
+  } catch (e) {
+    return { ok: false, msg: e.message };
+  }
 }
 
 // === AUTOMATIZACIÓN (TRIGGERS DIARIOS) ===
@@ -530,6 +560,60 @@ function getMenuByDate_(dateStr) {
     }
   }
   return menu;
+}
+
+function getAllMenus_(availableDates) {
+  const sh = SpreadsheetApp.getActive().getSheetByName('Menu');
+  const data = sh.getDataRange().getValues();
+  const menuMap = {}; // { dateStr: { cat: [items] } }
+
+  // Initialize map
+  const validDates = new Set(availableDates.map(d => d.value));
+  availableDates.forEach(d => {
+    menuMap[d.value] = {};
+  });
+
+  for (let i = 1; i < data.length; i++) {
+    const rowDate = formatDate_(new Date(data[i][1]));
+    if (validDates.has(rowDate) && String(data[i][5]).toUpperCase() === 'SI') {
+      const cat = data[i][2];
+      const item = { id: data[i][0], plato: data[i][3], desc: data[i][4] };
+
+      if (!menuMap[rowDate][cat]) menuMap[rowDate][cat] = [];
+      menuMap[rowDate][cat].push(item);
+    }
+  }
+  return menuMap;
+}
+
+function getUserPrefs_(email) {
+  const sh = SpreadsheetApp.getActive().getSheetByName('Usuarios');
+  const data = sh.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][0]).toLowerCase() === email) {
+      return JSON.parse(data[i][5] || '{}');
+    }
+  }
+  return {};
+}
+
+function getAllUserOrders_(email, availableDates) {
+  const sh = SpreadsheetApp.getActive().getSheetByName('Pedidos');
+  const data = sh.getDataRange().getValues();
+  const ordersMap = {};
+
+  const validDates = new Set(availableDates.map(d => d.value));
+
+  for (let i = 1; i < data.length; i++) {
+    const rowDate = formatDate_(new Date(data[i][2]));
+    // Check if it's one of the relevant dates AND belongs to user AND not canceled
+    if (validDates.has(rowDate) &&
+        String(data[i][3]).toLowerCase() === email &&
+        data[i][8] !== 'CANCELADO') {
+      ordersMap[rowDate] = { id: data[i][0], resumen: data[i][6], detalle: JSON.parse(data[i][7] || '{}') };
+    }
+  }
+  return ordersMap;
 }
 
 function getOrderByUserDate_(email, dateStr) {
