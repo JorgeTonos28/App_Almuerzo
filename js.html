@@ -47,6 +47,34 @@ createApp({
     
     const selectedCount = computed(() => selection.size);
 
+    // === SUMMARY TABLE HELPERS ===
+    const summaryHeaders = computed(() => categoryOrder);
+
+    const userWeeklySummary = computed(() => {
+      if (!dates.value.length) return [];
+
+      return dates.value.map(d => {
+        const order = allOrders.value[d.value];
+        const row = { date: d.value, label: d.label, items: {} };
+
+        if (order && order.detalle) {
+          const det = order.detalle;
+          // det.categorias and det.items are parallel arrays
+          if (Array.isArray(det.categorias) && Array.isArray(det.items)) {
+             det.categorias.forEach((cat, idx) => {
+                if (!row.items[cat]) {
+                   row.items[cat] = det.items[idx];
+                } else {
+                   // Append if multiple (e.g. Vegetariana)
+                   row.items[cat] += ', ' + det.items[idx];
+                }
+             });
+          }
+        }
+        return row;
+      });
+    });
+
     const displayDate = computed(() => {
       const d = dates.value.find(x => x.value === currentDate.value);
       return d ? d.label : currentDate.value;
@@ -309,7 +337,25 @@ createApp({
     
     const scrollToCat = (cat) => {
       const el = document.getElementById('cat-'+cat);
-      if(el) el.scrollIntoView({behavior: 'smooth', block: 'start'});
+      if(el) {
+        // Offset for sticky header
+        const y = el.getBoundingClientRect().top + window.pageYOffset - 140;
+        window.scrollTo({top: y, behavior: 'smooth'});
+      }
+    };
+
+    const getIconForCategory = (cat) => {
+      const map = {
+        'Arroces': 'fa-bowl-rice',
+        'Granos': 'fa-spoon', // Generic
+        'Carnes': 'fa-drumstick-bite',
+        'Ensaladas': 'fa-carrot',
+        'Viveres': 'fa-utensils',
+        'Vegetariana': 'fa-leaf',
+        'Caldo': 'fa-mug-hot',
+        'Opcion_Rapida': 'fa-burger'
+      };
+      return 'fa-solid ' + (map[cat] || 'fa-circle');
     };
 
     // Inicialización
@@ -337,7 +383,10 @@ createApp({
       changeDate, submitOrder, cancelOrder, toggleReminders, dismissBanner,
       
       // UI Utils
-      formatCatName, scrollToCat
+      formatCatName, scrollToCat, getIconForCategory,
+
+      // Summary
+      userWeeklySummary, summaryHeaders
     };
   }
 }).mount('#app');
