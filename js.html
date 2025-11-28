@@ -47,6 +47,34 @@ createApp({
     
     const selectedCount = computed(() => selection.size);
 
+    // === SUMMARY TABLE HELPERS ===
+    const summaryHeaders = computed(() => categoryOrder);
+
+    const userWeeklySummary = computed(() => {
+      if (!dates.value.length) return [];
+
+      return dates.value.map(d => {
+        const order = allOrders.value[d.value];
+        const row = { date: d.value, label: d.label, items: {} };
+
+        if (order && order.detalle) {
+          const det = order.detalle;
+          // det.categorias and det.items are parallel arrays
+          if (Array.isArray(det.categorias) && Array.isArray(det.items)) {
+             det.categorias.forEach((cat, idx) => {
+                if (!row.items[cat]) {
+                   row.items[cat] = det.items[idx];
+                } else {
+                   // Append if multiple (e.g. Vegetariana)
+                   row.items[cat] += ', ' + det.items[idx];
+                }
+             });
+          }
+        }
+        return row;
+      });
+    });
+
     const displayDate = computed(() => {
       const d = dates.value.find(x => x.value === currentDate.value);
       return d ? d.label : currentDate.value;
@@ -337,7 +365,10 @@ createApp({
       changeDate, submitOrder, cancelOrder, toggleReminders, dismissBanner,
       
       // UI Utils
-      formatCatName, scrollToCat
+      formatCatName, scrollToCat,
+
+      // Summary
+      userWeeklySummary, summaryHeaders
     };
   }
 }).mount('#app');
