@@ -1,7 +1,7 @@
 /**
  * Code.gs - Backend V4 (Final Consolidado - Automatizado)
  */
-const APP_VERSION = 'v4.2-Features';
+const APP_VERSION = 'v4.6-Admin-Complete';
 
 // === RUTAS E INICIO ===
 
@@ -40,10 +40,25 @@ function include(filename) {
  * Obtiene datos para la app.
  * Devuelve TODAS las fechas futuras válidas con menú para permitir adelantado.
  */
-function apiGetInitData(requestedDateStr) {
+function apiGetInitData(requestedDateStr, impersonateEmail) {
   try {
-    const user = getUserInfo_();
-    if (!user) throw new Error("Usuario no encontrado.");
+    const activeUser = getUserInfo_();
+    if (!activeUser) throw new Error("Usuario no encontrado.");
+
+    let targetUser = activeUser;
+    let deptUsers = [];
+
+    // Logic for Impersonation (ADMIN_DEP only)
+    if (activeUser.rol === 'ADMIN_DEP') {
+       deptUsers = getUsersByDept_(activeUser.departamento);
+
+       if (impersonateEmail && impersonateEmail !== activeUser.email) {
+          const checkUser = getUserInfo_(impersonateEmail);
+          if (checkUser && checkUser.departamento === activeUser.departamento) {
+             targetUser = checkUser;
+          }
+       }
+    }
 
     // Obtener TODAS las fechas futuras válidas con menú
     const availableDates = getAvailableMenuDates_(true); // true = fetchAll
@@ -60,22 +75,25 @@ function apiGetInitData(requestedDateStr) {
 
     // Optimization: Fetch ALL menus and orders
     const allMenus = getAllMenus_(availableDates);
-    const allOrders = getAllUserOrders_(user.email, availableDates);
+    // Fetch orders for TARGET user
+    const allOrders = getAllUserOrders_(targetUser.email, availableDates);
 
     const menu = allMenus[targetDateStr] || {};
     const existingOrder = allOrders[targetDateStr] || null;
 
     let adminSummary = null;
-    if (user.rol === 'ADMIN_GEN' || user.rol === 'ADMIN_DEP') {
-      adminSummary = getDepartmentStats_(targetDateStr, (user.rol === 'ADMIN_GEN' ? null : user.departamento));
+    if (activeUser.rol === 'ADMIN_GEN' || activeUser.rol === 'ADMIN_DEP') {
+      adminSummary = getDepartmentStats_(targetDateStr, (activeUser.rol === 'ADMIN_GEN' ? null : activeUser.departamento));
     }
 
-    // User preferences
-    const prefs = getUserPrefs_(user.email);
+    // User preferences of TARGET
+    const prefs = getUserPrefs_(targetUser.email);
 
     return {
       ok: true,
-      user: user,
+      user: targetUser,
+      activeUser: activeUser,
+      deptUsers: deptUsers,
       userPrefs: prefs,
       currentDate: targetDateStr,
       dates: availableDates,
@@ -93,7 +111,19 @@ function apiGetInitData(requestedDateStr) {
 
 function apiSubmitOrder(payload) {
   try {
-    const user = getUserInfo_();
+    const activeUser = getUserInfo_();
+    let targetUser = activeUser;
+
+    // Impersonation Logic
+    if (payload.impersonateEmail && activeUser.rol === 'ADMIN_DEP') {
+       const checkUser = getUserInfo_(payload.impersonateEmail);
+       if (checkUser && checkUser.departamento === activeUser.departamento) {
+          targetUser = checkUser;
+       } else {
+          throw new Error("No tienes permiso para pedir por este usuario.");
+       }
+    }
+
     const dateStr = payload.date;
 
     // 1. Validar Bloqueo Global (Hora de Cierre o Bloqueo explícito)
@@ -105,7 +135,7 @@ function apiSubmitOrder(payload) {
     validateOrderRules_(payload);
 
     // 3. Guardar
-    saveOrderToSheet_(user, dateStr, payload);
+    saveOrderToSheet_(targetUser, dateStr, payload);
 
     return { ok: true };
 
@@ -529,8 +559,8 @@ function getOrdersByDate_(dateStr) {
   return list;
 }
 
-function getUserInfo_() {
-  const email = Session.getActiveUser().getEmail().toLowerCase();
+function getUserInfo_(targetEmail) {
+  const email = targetEmail ? targetEmail.toLowerCase() : Session.getActiveUser().getEmail().toLowerCase();
   const sh = SpreadsheetApp.getActive().getSheetByName('Usuarios');
   const data = sh.getDataRange().getValues();
   for (let i = 1; i < data.length; i++) {
@@ -545,6 +575,21 @@ function getUserInfo_() {
     }
   }
   return null;
+}
+
+function getUsersByDept_(dept) {
+  const sh = SpreadsheetApp.getActive().getSheetByName('Usuarios');
+  const data = sh.getDataRange().getValues();
+  const users = [];
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][2] === dept && data[i][4] === 'ACTIVO') {
+       users.push({
+         email: data[i][0],
+         nombre: data[i][1]
+       });
+    }
+  }
+  return users;
 }
 
 function getMenuByDate_(dateStr) {
@@ -684,6 +729,100 @@ function validateOrderRules_(sel) {
   }
 }
 
+// === API ADMINISTRACIÓN ===
+
+function apiGetAdminData() {
+  const user = getUserInfo_();
+  if (!user || (user.rol !== 'ADMIN_GEN' && user.rol !== 'ADMIN_DEP')) {
+    throw new Error("Acceso denegado.");
+  }
+
+  const data = { ok: true, rol: user.rol, dept: user.departamento };
+
+  // 1. Usuarios
+  const uSh = SpreadsheetApp.getActive().getSheetByName('Usuarios');
+  const uData = uSh.getDataRange().getValues();
+  data.users = uData.slice(1).map(r => ({
+    email: r[0], nombre: r[1], departamento: r[2], rol: r[3], estado: r[4]
+  })).filter(u => user.rol === 'ADMIN_GEN' || u.departamento === user.departamento);
+
+  // 2. Pedidos (Futuros/Recientes)
+  const pSh = SpreadsheetApp.getActive().getSheetByName('Pedidos');
+  const pData = pSh.getDataRange().getValues();
+  const nowStr = formatDate_(new Date());
+  data.orders = pData.slice(1)
+    .filter(r => formatDate_(new Date(r[2])) >= nowStr)
+    .map(r => ({
+       id: r[0], date: formatDate_(new Date(r[2])), email: r[3], nombre: r[4],
+       dept: r[5], resumen: r[6], estado: r[8]
+    }))
+    .filter(o => user.rol === 'ADMIN_GEN' || o.dept === user.departamento);
+
+  if (user.rol === 'ADMIN_GEN') {
+     data.config = getConfigValue_('ALL');
+     const hSh = SpreadsheetApp.getActive().getSheetByName('DiasLibres');
+     if (hSh) {
+        data.holidays = hSh.getDataRange().getValues().slice(1).map(r => ({ date: formatDate_(new Date(r[0])), desc: r[1] }));
+     }
+  }
+
+  return data;
+}
+
+function apiAdminSaveUser(userData) {
+  const admin = getUserInfo_();
+  if (!admin || !['ADMIN_GEN', 'ADMIN_DEP'].includes(admin.rol)) throw new Error("Denegado");
+
+  // Validate Dept
+  if (admin.rol === 'ADMIN_DEP' && userData.departamento !== admin.departamento) {
+     throw new Error("No puedes agregar usuarios a otro departamento.");
+  }
+
+  const ss = SpreadsheetApp.getActive();
+  const sh = ss.getSheetByName('Usuarios');
+  const data = sh.getDataRange().getValues();
+  let rowIdx = -1;
+
+  for(let i=1; i<data.length; i++) {
+     if (String(data[i][0]).toLowerCase() === String(userData.email).toLowerCase()) {
+        rowIdx = i+1;
+        break;
+     }
+  }
+
+  const rowContent = [
+     userData.email.toLowerCase(),
+     userData.nombre,
+     userData.departamento,
+     userData.rol || 'USER',
+     userData.estado || 'ACTIVO',
+     (rowIdx > 0 ? data[rowIdx-1][5] : '{}')
+  ];
+
+  if (rowIdx > 0) {
+     sh.getRange(rowIdx, 1, 1, 5).setValues([rowContent.slice(0,5)]);
+  } else {
+     sh.appendRow(rowContent);
+  }
+  return { ok: true };
+}
+
+function apiAdminDeleteUser(email) {
+   const admin = getUserInfo_();
+   const ss = SpreadsheetApp.getActive();
+   const sh = ss.getSheetByName('Usuarios');
+   const data = sh.getDataRange().getValues();
+
+   for(let i=1; i<data.length; i++) {
+      if (String(data[i][0]).toLowerCase() === String(email).toLowerCase()) {
+         if (admin.rol === 'ADMIN_DEP' && data[i][2] !== admin.departamento) throw new Error("Denegado");
+         sh.getRange(i+1, 5).setValue('INACTIVO');
+         return { ok: true };
+      }
+   }
+   return { ok: false, msg: "Usuario no encontrado" };
+}
+
 // === UTILS ===
 
 let _configCache = null;
@@ -699,6 +838,7 @@ function getConfigValue_(key) {
       }
     }
   }
+  if (key === 'ALL') return _configCache;
   return _configCache[key] !== undefined ? _configCache[key] : '';
 }
 
