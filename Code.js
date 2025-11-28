@@ -1,7 +1,7 @@
 /**
  * Code.gs - Backend V4 (Final Consolidado - Automatizado)
  */
-const APP_VERSION = 'v4.3-UX';
+const APP_VERSION = 'v4.3.1-Cleanup';
 
 // === RUTAS E INICIO ===
 
