@@ -16,6 +16,10 @@ createApp({
     // Manejo de Fechas (Nuevo)
     const currentDate = ref(''); // Fecha seleccionada actualmente (YYYY-MM-DD)
     const dates = ref([]);       // Lista de fechas disponibles (tabs)
+    const allMenus = ref({});
+    const allOrders = ref({});
+    const remindersEnabled = ref(true);
+    const showMultiDayBanner = ref(false);
     
     // Formulario
     const comments = ref('');
@@ -43,6 +47,17 @@ createApp({
     
     const selectedCount = computed(() => selection.size);
 
+    const displayDate = computed(() => {
+      const d = dates.value.find(x => x.value === currentDate.value);
+      return d ? d.label : currentDate.value;
+    });
+
+    const isCutoffPassed = computed(() => {
+      if (!currentDate.value) return true;
+      if (dates.value.length === 0) return true;
+      return !dates.value.some(d => d.value === currentDate.value);
+    });
+
     // === REGLAS DE NEGOCIO (VALIDACIONES) ===
     const specialCats = ['Vegetariana', 'Caldo', 'Opcion_Rapida'];
     // exclusionCats: Categorías que no pueden mezclarse entre sí
@@ -65,24 +80,45 @@ createApp({
     const isCatDisabled = (cat) => {
       // 1. Si elegí un especial, bloqueo todo lo que NO sea esa misma categoría especial
       if (isSpecialSelected.value) {
-        // Si la categoría actual ES la especial seleccionada, no la bloqueo
         if (selectedCats.value.includes(cat)) return false;
-        // Cualquier otra cosa, bloqueada
         return true;
       }
 
-      // 2. Regla Arroz vs Viveres (Mutuamente exclusivos)
+      // 2. Regla Granos (Estricta)
+      if (selectedCats.value.includes('Granos')) {
+        const allowed = ['Granos', 'Arroces', 'Carnes', 'Ensaladas', 'Caldo'];
+        if (!allowed.includes(cat)) return true;
+      }
+
+      if (cat === 'Granos') {
+         if (selectedCats.value.some(c => ['Viveres', 'Vegetariana', 'Opcion_Rapida'].includes(c))) return true;
+         let hasNonWhiteRice = false;
+         selection.forEach(id => {
+            const item = selectionData[id];
+            if (item && item.cat === 'Arroces' && !item.plato.toLowerCase().includes('arroz blanco')) hasNonWhiteRice = true;
+         });
+         if (hasNonWhiteRice) return true;
+      }
+
+      // 3. Regla Arroz vs Viveres (Mutuamente exclusivos)
       if (cat === 'Arroces' && selectedCats.value.includes('Viveres')) return true;
       if (cat === 'Viveres' && selectedCats.value.includes('Arroces')) return true;
 
-      // 3. Si elegí algo "Regular" (Arroz, Carne, etc.), bloqueo los "Especiales"
+      // 4. Si elegí algo "Regular" (Arroz, Carne, etc.), bloqueo los "Especiales"
       if (selectedCount.value > 0 && specialCats.includes(cat)) return true;
 
       return false;
     };
 
-    // Validar items específicos (por ahora igual a categoría)
-    const isItemDisabled = (cat) => isCatDisabled(cat);
+    // Validar items específicos
+    const isItemDisabled = (cat, item) => {
+       if (isCatDisabled(cat)) return true;
+       // Si Granos está seleccionado, y estamos en Arroces, solo Arroz Blanco está permitido.
+       if (cat === 'Arroces' && selectedCats.value.includes('Granos')) {
+          if (!item.plato.toLowerCase().includes('arroz blanco')) return true;
+       }
+       return false;
+    };
 
     // Warnings específicos
     const showGrainWarning = computed(() => {
@@ -135,7 +171,14 @@ createApp({
             user.value = res.user;
             menu.value = res.menu;
             myOrder.value = res.myOrder;
+            allMenus.value = res.allMenus || {};
+            allOrders.value = res.allOrders || {};
             adminData.value = res.adminData;
+            remindersEnabled.value = res.userPrefs?.reminders !== false;
+
+            if (!localStorage.getItem('multiDayBannerDismissed')) {
+              showMultiDayBanner.value = true;
+            }
             
             // Actualizar estado de fechas
             currentDate.value = res.currentDate;
@@ -153,28 +196,55 @@ createApp({
 
     // Cambiar de fecha (Tabs superiores)
     const changeDate = (dateStr) => {
-      if (dateStr === currentDate.value) return; // No recargar si es la misma
-      loadData(dateStr);
+      if (dateStr === currentDate.value) return;
+
+      if (allMenus.value[dateStr]) {
+        currentDate.value = dateStr;
+        menu.value = allMenus.value[dateStr];
+        myOrder.value = allOrders.value[dateStr] || null;
+
+        selection.clear();
+        for (const prop of Object.getOwnPropertyNames(selectionData)) {
+          delete selectionData[prop];
+        }
+        comments.value = '';
+      } else {
+        loadData(dateStr);
+      }
     };
 
     const toggleItem = (cat, item) => {
-      // Si la categoría está deshabilitada y el ítem NO está seleccionado, no hacer nada
-      if (isCatDisabled(cat) && !selection.has(item.id)) return;
+      if (isItemDisabled(cat, item) && !selection.has(item.id)) return;
 
       if (selection.has(item.id)) {
-        // Deseleccionar
         selection.delete(item.id);
         delete selectionData[item.id];
       } else {
-        // Seleccionar
-        // Si es categoría especial, asegurar limpieza de cualquier residuo (doble check)
-        if (specialCats.includes(cat)) {
-           // Podrías limpiar todo antes si quieres comportamiento estricto de radio button
-           // selection.clear(); 
+        // Single selection rule
+        if (!['Vegetariana', 'Opcion_Rapida'].includes(cat)) {
+           const toRemove = [];
+           selection.forEach(id => {
+              if (selectionData[id] && selectionData[id].cat === cat) toRemove.push(id);
+           });
+           toRemove.forEach(id => {
+              selection.delete(id);
+              delete selectionData[id];
+           });
         }
+
         selection.add(item.id);
         selectionData[item.id] = { cat, plato: item.plato };
       }
+    };
+
+    const toggleReminders = () => {
+      remindersEnabled.value = !remindersEnabled.value;
+      google.script.run.apiSetUserPreference('reminders', remindersEnabled.value);
+    };
+
+    const dismissBanner = () => {
+      showMultiDayBanner.value = false;
+      localStorage.setItem('multiDayBannerDismissed', 'true');
     };
 
     const submitOrder = () => {
@@ -255,12 +325,16 @@ createApp({
       // Computed
       isAdmin, isAdminGen, menuLoaded, categories,
       selectedCount, validationError, hasBlockingErrors, showGrainWarning,
+      displayDate, isCutoffPassed,
       
       // Métodos / Reglas UI
       toggleItem, isSelected, hasSelectionInCat, isCatDisabled, isItemDisabled,
       
+      // Estado
+      remindersEnabled, showMultiDayBanner,
+
       // Acciones Principales
-      changeDate, submitOrder, cancelOrder,
+      changeDate, submitOrder, cancelOrder, toggleReminders, dismissBanner,
       
       // UI Utils
       formatCatName, scrollToCat
