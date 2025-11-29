@@ -1,7 +1,7 @@
 /**
- * Code.gs - Backend V4 (Final Consolidado - Automatizado)
+ * Code.gs - Backend V5 (Refactor & New Features)
  */
-const APP_VERSION = 'v4.10-Admin-Fixes';
+const APP_VERSION = 'v5.0-Refactor';
 
 // === RUTAS E INICIO ===
 
@@ -36,10 +36,6 @@ function include(filename) {
 
 // === API PÚBLICA ===
 
-/**
- * Obtiene datos para la app.
- * Devuelve TODAS las fechas futuras válidas con menú para permitir adelantado.
- */
 function apiGetInitData(requestedDateStr, impersonateEmail) {
   try {
     const activeUser = getUserInfo_();
@@ -50,33 +46,28 @@ function apiGetInitData(requestedDateStr, impersonateEmail) {
 
     // Logic for Impersonation (ADMIN_DEP only)
     if (activeUser.rol === 'ADMIN_DEP') {
-       // Filter out self from deptUsers list to avoid duplicate in "Proxy" dropdown (as "Yo" covers self)
-       deptUsers = getUsersByDept_(activeUser.departamento).filter(u => u.email.toLowerCase() !== activeUser.email.toLowerCase());
+       // Filter out self
+       deptUsers = getUsersByDept_(activeUser.departamentoId).filter(u => u.email.toLowerCase() !== activeUser.email.toLowerCase());
 
        if (impersonateEmail && impersonateEmail !== activeUser.email) {
           const checkUser = getUserInfo_(impersonateEmail);
-          if (checkUser && checkUser.departamento === activeUser.departamento) {
+          if (checkUser && checkUser.departamentoId === activeUser.departamentoId) {
              targetUser = checkUser;
           }
        }
     }
 
-    // Obtener TODAS las fechas futuras válidas con menú
-    const availableDates = getAvailableMenuDates_(true); // true = fetchAll
-
+    const availableDates = getAvailableMenuDates_(true);
     if (availableDates.length === 0) {
       return { ok: true, empty: true, msg: "No hay menús disponibles." };
     }
 
-    // Fecha objetivo: la solicitada O la primera disponible (siguiente día hábil)
     let targetDateStr = requestedDateStr;
     if (!targetDateStr || !availableDates.some(d => d.value === targetDateStr)) {
       targetDateStr = availableDates[0].value;
     }
 
-    // Optimization: Fetch ALL menus and orders
     const allMenus = getAllMenus_(availableDates);
-    // Fetch orders for TARGET user
     const allOrders = getAllUserOrders_(targetUser.email, availableDates);
 
     const menu = allMenus[targetDateStr] || {};
@@ -84,11 +75,14 @@ function apiGetInitData(requestedDateStr, impersonateEmail) {
 
     let adminSummary = null;
     if (activeUser.rol === 'ADMIN_GEN' || activeUser.rol === 'ADMIN_DEP') {
-      adminSummary = getDepartmentStats_(targetDateStr, (activeUser.rol === 'ADMIN_GEN' ? null : activeUser.departamento));
+      adminSummary = getDepartmentStats_(targetDateStr, (activeUser.rol === 'ADMIN_GEN' ? null : activeUser.departamentoId));
     }
 
-    // User preferences of TARGET
     const prefs = getUserPrefs_(targetUser.email);
+
+    // Get Banner Text from Config
+    const bannerText = getConfigValue_('PLAN_WEEK_TEXT') || 'Planifica tu semana';
+    const bannerLimit = parseInt(getConfigValue_('PLAN_WEEK_LIMIT') || '5', 10);
 
     return {
       ok: true,
@@ -102,7 +96,9 @@ function apiGetInitData(requestedDateStr, impersonateEmail) {
       allMenus: allMenus,
       allOrders: allOrders,
       myOrder: existingOrder,
-      adminData: adminSummary
+      adminData: adminSummary,
+      bannerConfig: { text: bannerText, limit: bannerLimit },
+      deptMap: getDepartmentMap_()
     };
 
   } catch (e) {
@@ -115,10 +111,9 @@ function apiSubmitOrder(payload) {
     const activeUser = getUserInfo_();
     let targetUser = activeUser;
 
-    // Impersonation Logic
     if (payload.impersonateEmail && activeUser.rol === 'ADMIN_DEP') {
        const checkUser = getUserInfo_(payload.impersonateEmail);
-       if (checkUser && checkUser.departamento === activeUser.departamento) {
+       if (checkUser && checkUser.departamentoId === activeUser.departamentoId) {
           targetUser = checkUser;
        } else {
           throw new Error("No tienes permiso para pedir por este usuario.");
@@ -126,20 +121,14 @@ function apiSubmitOrder(payload) {
     }
 
     const dateStr = payload.date;
-
-    // 1. Validar Bloqueo Global (Hora de Cierre o Bloqueo explícito)
     if (!isDateOpenForOrdering_(dateStr)) {
       throw new Error("El tiempo límite para pedir el almuerzo de esta fecha ha expirado.");
     }
 
-    // 2. Validar Reglas de Menú
     validateOrderRules_(payload);
-
-    // 3. Guardar
     saveOrderToSheet_(targetUser, dateStr, payload, activeUser.email);
 
     return { ok: true };
-
   } catch (e) {
     return { ok: false, msg: e.message };
   }
@@ -164,14 +153,32 @@ function apiCancelOrder(orderId) {
   return { ok: false, msg: "Pedido no encontrado." };
 }
 
-function apiSetUserPreference(key, value) {
+function apiSetUserPreference(key, value, targetEmail) {
   try {
-    const userEmail = Session.getActiveUser().getEmail().toLowerCase();
+    const activeUser = getUserInfo_();
+    let email = activeUser.email.toLowerCase();
+
+    // Allow Admin to set prefs for others (e.g. disable reminders)
+    if (targetEmail) {
+       if (['ADMIN_GEN', 'ADMIN_DEP'].includes(activeUser.rol)) {
+          // Verify scope for ADMIN_DEP
+          if (activeUser.rol === 'ADMIN_DEP') {
+             const target = getUserInfo_(targetEmail);
+             if (!target || target.departamentoId !== activeUser.departamentoId) {
+                throw new Error("No puedes modificar usuarios de otro departamento.");
+             }
+          }
+          email = targetEmail.toLowerCase();
+       } else {
+          throw new Error("No tienes permisos para modificar otros usuarios.");
+       }
+    }
+
     const sh = SpreadsheetApp.getActive().getSheetByName('Usuarios');
     const data = sh.getDataRange().getValues();
 
     for (let i = 1; i < data.length; i++) {
-      if (String(data[i][0]).toLowerCase() === userEmail) {
+      if (String(data[i][0]).toLowerCase() === email) {
         const currentPrefs = JSON.parse(data[i][5] || '{}');
         currentPrefs[key] = value;
         sh.getRange(i + 1, 6).setValue(JSON.stringify(currentPrefs));
@@ -184,25 +191,26 @@ function apiSetUserPreference(key, value) {
   }
 }
 
-// === AUTOMATIZACIÓN (TRIGGERS DIARIOS) ===
+function apiDismissBanner() {
+   const user = getUserInfo_();
+   const prefs = getUserPrefs_(user.email);
+   let count = prefs.banner_count || 0;
+   count++;
+   return apiSetUserPreference('banner_count', count);
+}
+// === AUTOMATIZACIÓN (TRIGGERS) ===
 
-/**
- * 1:00 PM: Recordatorios
- */
 function scheduledSendReminders() {
   const nextBusinessDay = getNextBusinessDay_(new Date());
-  if (!nextBusinessDay) return; // No hay día hábil próximo configurado
+  if (!nextBusinessDay) return;
 
   const dateStr = formatDate_(nextBusinessDay);
-
-  // Lista de usuarios activos
   const ss = SpreadsheetApp.getActive();
   const uSh = ss.getSheetByName('Usuarios');
   const uData = uSh.getDataRange().getValues();
   const pSh = ss.getSheetByName('Pedidos');
   const pData = pSh.getDataRange().getValues();
 
-  // Set de emails que YA pidieron para esa fecha
   const orderedEmails = new Set();
   for (let i = 1; i < pData.length; i++) {
     const rowDate = formatDate_(new Date(pData[i][2]));
@@ -211,531 +219,74 @@ function scheduledSendReminders() {
     }
   }
 
-  // Recorrer usuarios y notificar
   uData.slice(1).forEach(row => {
     const email = String(row[0]).toLowerCase();
     const estado = row[4];
     const prefs = JSON.parse(row[5] || '{}');
-
-    // Solo activos, que NO han pedido, y que tienen recordatorios ON (default ON)
     if (estado === 'ACTIVO' && !orderedEmails.has(email) && prefs.reminders !== false) {
+      // Calculate closing time for display
+      const envio = getConfigValue_('HORA_ENVIO') || '15:00';
+      const mins = parseInt(getConfigValue_('MINUTOS_PREV_CIERRE') || '30', 10);
+      // Rough calc for display
       sendEmail_(email, "Recordatorio de Almuerzo",
-        `Hola ${row[1]},<br><br>Aún no has realizado tu pedido de almuerzo para el <b>${formatDisplayDate_(dateStr)}</b>.<br>` +
-        `Recuerda que tienes hasta las ${getConfigValue_('HORA_CIERRE')} para hacerlo.<br><br>` +
+        `Hola ${row[1]},<br><br>Aún no has realizado tu pedido para el <b>${formatDisplayDate_(dateStr)}</b>.<br>` +
+        `Recuerda pedir antes del cierre.<br><br>` +
         `<a href="${ScriptApp.getService().getUrl()}">Ir a la App</a>`
       );
     }
   });
 }
 
-/**
- * 2:00 PM: Bloqueo de Hoja (Visual)
- * En realidad el bloqueo lógico está en isDateOpenForOrdering_ basado en HORA_CIERRE.
- * Esta función es simbólica o para protección de celdas si se usara Sheet UI.
- * Como es Web App, solo aseguramos que HORA_CIERRE se respete.
- */
-function scheduledLockSheet() {
-  console.log("Bloqueo lógico activado por horario (HORA_CIERRE).");
-}
-
-/**
- * 2:30 PM: Cierre, Respaldo y Limpieza
- */
 function scheduledDailyClose() {
   const now = new Date();
   const nextBusinessDay = getNextBusinessDay_(now);
-  if (!nextBusinessDay) return; // Nada que cerrar si no hay operación mañana?
+  if (!nextBusinessDay) return;
 
-  // Nota: El cierre suele ser para el día siguiente.
-  // Ejemplo: Hoy Lunes 2:30 PM cierro pedidos para Martes.
   const targetDateStr = formatDate_(nextBusinessDay);
 
-  // 1. Generar Respaldo PDF/Excel de pedidos para targetDateStr
   backupOrdersToDrive_(targetDateStr);
-
-  // 2. Enviar Resumen General a Admins
   sendDailyAdminSummary_(targetDateStr);
-
-  // 3. Validar Integridad de Menú (Arroz Blanco) para días futuros
   checkMenuIntegrity_();
-
-  // 4. Actualizar Encabezados Visuales (si se usa la hoja como referencia)
-  updateSheetHeaders_(targetDateStr);
 }
 
-/**
- * 3:00 PM: Reportes por Departamento
- */
 function scheduledDepartmentReports() {
   const now = new Date();
   const nextBusinessDay = getNextBusinessDay_(now);
   if (!nextBusinessDay) return;
 
   const dateStr = formatDate_(nextBusinessDay);
+  const orders = getOrdersByDate_(dateStr); // Returns objects with resolved dept name if we implemented it, or IDs
 
-  // Agrupar pedidos por departamento
-  const orders = getOrdersByDate_(dateStr);
+  // We need to group by Dept ID.
   const byDept = {};
 
   orders.forEach(o => {
-    const dept = o.departamento || 'Sin Depto';
-    if (!byDept[dept]) byDept[dept] = [];
-    byDept[dept].push(o);
+    const deptId = o.departamentoId || 'Sin Depto'; // We need ID here
+    if (!byDept[deptId]) byDept[deptId] = [];
+    byDept[deptId].push(o);
   });
 
-  // Obtener mapeo de responsables
   const rawMap = getConfigValue_('RESPONSIBLES_EMAILS_JSON');
   let deptEmails = {};
   try { deptEmails = JSON.parse(rawMap); } catch (e) {}
 
-  // Enviar correos
-  Object.keys(byDept).forEach(dept => {
-    const recipient = deptEmails[dept];
+  const deptMap = getDepartmentMap_();
+
+  Object.keys(byDept).forEach(deptId => {
+    const recipient = deptEmails[deptId]; // Map uses IDs
+    const deptName = deptMap[deptId] || deptId;
     if (recipient) {
-      const listHtml = byDept[dept].map(o => `<li><b>${o.nombre}:</b> ${o.resumen}</li>`).join('');
-      sendEmail_(recipient, `Reporte Almuerzo ${dept} - ${dateStr}`,
+      const listHtml = byDept[deptId].map(o => `<li><b>${o.nombre}:</b> ${o.resumen}</li>`).join('');
+      sendEmail_(recipient, `Reporte Almuerzo ${deptName} - ${dateStr}`,
         `<h3>Pedidos para ${formatDisplayDate_(dateStr)}</h3>` +
-        `<p>Total platos: ${byDept[dept].length}</p>` +
+        `<p>Total platos: ${byDept[deptId].length}</p>` +
         `<ul>${listHtml}</ul>`
       );
     }
   });
 }
 
-// === LÓGICA CORE (FECHAS Y MENÚ) ===
-
-/**
- * Devuelve fechas futuras con menú disponible.
- * @param {boolean} fetchAll Si es true, trae todas. Si false, solo las inmediatas.
- */
-function getAvailableMenuDates_(fetchAll) {
-  const ss = SpreadsheetApp.getActive();
-  const menuSh = ss.getSheetByName('Menu');
-  const data = menuSh.getRange(2, 1, menuSh.getLastRow()-1, 2).getValues();
-
-  const now = new Date();
-  const todayStr = formatDate_(now);
-
-  const datesSet = new Set();
-  data.forEach(r => {
-    const dStr = formatDate_(new Date(r[1]));
-    if (dStr >= todayStr) datesSet.add(dStr);
-  });
-
-  const sorted = Array.from(datesSet).sort();
-  const holidays = getHolidaysSet_();
-  const valid = [];
-
-  sorted.forEach(dStr => {
-    // Para "adelantar", permitimos pedir si la fecha es futura,
-    // AUNQUE hoy ya haya pasado la hora de cierre de "mañana".
-    // La regla de cierre es: "Para pedir para mañana, hazlo antes de hoy 2:30".
-    // Para pedir para pasado mañana, la hora de cierre es mañana 2:30.
-    // Por tanto, fechas > mañana siempre están abiertas hoy.
-
-    if (isDateOpenForOrdering_(dStr, holidays)) {
-      valid.push({ value: dStr, label: formatDisplayDate_(dStr) });
-    }
-  });
-
-  return valid;
-}
-
-function isDateOpenForOrdering_(targetDateStr, holidaysSet) {
-  if (!holidaysSet) holidaysSet = getHolidaysSet_();
-  const now = new Date();
-  const targetDate = new Date(targetDateStr + 'T12:00:00');
-
-  if (targetDate <= now) return false; // Pasado
-
-  const day = targetDate.getDay();
-  if (day === 0 || day === 6) return false; // Finde
-  if (holidaysSet.has(targetDateStr)) return false; // Feriado
-
-  // Regla Cierre: Pedir antes de HORA_CIERRE del día hábil previo.
-  const prevBizDay = getPreviousBusinessDay_(targetDate, holidaysSet);
-  const prevBizDayStr = formatDate_(prevBizDay);
-  const todayStr = formatDate_(now);
-
-  // Si hoy es el día previo (ej. pido para mañana)
-  if (todayStr === prevBizDayStr) {
-    const configVal = getConfigValue_('HORA_CIERRE');
-    let h, m;
-
-    // Robust parsing: Handle String "14:30" or Date object
-    if (configVal instanceof Date) {
-      h = configVal.getHours();
-      m = configVal.getMinutes();
-    } else {
-      const cutStr = String(configVal || '14:30');
-      const parts = cutStr.split(':');
-      if (parts.length >= 2) {
-        h = parseInt(parts[0], 10);
-        m = parseInt(parts[1], 10);
-      } else {
-        h = 14; m = 30; // Fallback
-      }
-    }
-
-    const limit = new Date();
-    limit.setHours(h, m, 0, 0);
-    if (now > limit) return false;
-  }
-
-  // Si hoy es posterior al día previo (ya pasó el día de pedir)
-  const zeroNow = new Date(now); zeroNow.setHours(0,0,0,0);
-  const zeroPrev = new Date(prevBizDay); zeroPrev.setHours(0,0,0,0);
-  if (zeroNow > zeroPrev) return false;
-
-  return true;
-}
-
-// === RESPALDOS Y HELPERS ===
-
-function backupOrdersToDrive_(dateStr) {
-  const rootId = getConfigValue_('BACKUP_FOLDER_ID');
-  if (!rootId) return;
-
-  const ss = SpreadsheetApp.getActive();
-  const sh = ss.getSheetByName('Pedidos');
-  const data = sh.getDataRange().getValues();
-
-  // Filtrar pedidos de la fecha
-  const filtered = data.filter((row, i) => i === 0 || formatDate_(new Date(row[2])) === dateStr);
-  if (filtered.length <= 1) return; // Solo header
-
-  try {
-    const rootFolder = DriveApp.getFolderById(rootId);
-    const d = new Date(dateStr + 'T12:00:00');
-    const year = String(d.getFullYear());
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-
-    // Estructura Año/Mes
-    let yFolder = rootFolder.getFoldersByName(year).hasNext() ? rootFolder.getFoldersByName(year).next() : rootFolder.createFolder(year);
-    let mFolder = yFolder.getFoldersByName(month).hasNext() ? yFolder.getFoldersByName(month).next() : yFolder.createFolder(month);
-
-    // Crear Spreadsheet temporal
-    const tempSheet = SpreadsheetApp.create(`Pedidos_${dateStr}`);
-    tempSheet.getSheets()[0].getRange(1, 1, filtered.length, filtered[0].length).setValues(filtered);
-    const tempFile = DriveApp.getFileById(tempSheet.getId());
-
-    // Mover a carpeta
-    tempFile.moveTo(mFolder);
-
-    // Generar PDF (básico)
-    const pdfBlob = tempFile.getAs('application/pdf');
-    mFolder.createFile(pdfBlob).setName(`Pedidos_${dateStr}.pdf`);
-
-    // Borrar temporal si se quiere solo PDF o dejar excel. La guía dice "PDF y Excel".
-    // Dejamos ambos.
-
-  } catch (e) {
-    console.error("Error backup: " + e.message);
-  }
-}
-
-function sendDailyAdminSummary_(dateStr) {
-  const admins = getConfigValue_('ADMIN_EMAILS');
-  if (!admins) return;
-
-  const orders = getOrdersByDate_(dateStr);
-  const count = orders.length;
-
-  if (count > 0) {
-    sendEmail_(admins, `Resumen Pedidos ${dateStr}`,
-      `Se han registrado <b>${count}</b> pedidos para el día ${dateStr}.<br>` +
-      `El respaldo ha sido generado en Drive.`
-    );
-  }
-}
-
-function sendEmail_(to, subject, htmlBody) {
-  const testMode = getConfigValue_('TEST_EMAIL_MODE') === 'TRUE';
-  const testDest = getConfigValue_('TEST_EMAIL_DEST');
-  const senderName = getConfigValue_('MAIL_SENDER_NAME');
-
-  const recipient = testMode ? testDest : to;
-  if (!recipient) return;
-
-  const finalSubject = testMode ? `[TEST] ${subject}` : subject;
-
-  // Inyectar firma si existe
-  const sigUrl = getSignatureDataUrl_();
-  const signatureHtml = sigUrl ? `<br><br><img src="${sigUrl}" style="max-height:100px;">` : '';
-
-  MailApp.sendEmail({
-    to: recipient,
-    subject: finalSubject,
-    htmlBody: htmlBody + signatureHtml,
-    name: senderName
-  });
-}
-
-function checkMenuIntegrity_() {
-  const ss = SpreadsheetApp.getActive();
-  const mSh = ss.getSheetByName('Menu');
-  const data = mSh.getDataRange().getValues();
-
-  const datesToCheck = new Set();
-  const menuMap = {}; // { date: { hasRice: bool, id: ... } }
-
-  // Recolectar datos
-  for (let i = 1; i < data.length; i++) {
-    const dStr = formatDate_(new Date(data[i][1]));
-    const cat = data[i][2];
-    const item = String(data[i][3]).toLowerCase();
-
-    // Solo verificar futuro
-    if (dStr > formatDate_(new Date())) {
-      if (!menuMap[dStr]) menuMap[dStr] = { hasRice: false };
-
-      if (cat === 'Arroces' && item.includes('arroz blanco')) {
-        menuMap[dStr].hasRice = true;
-      }
-    }
-  }
-
-  // Verificar
-  const warnings = [];
-  Object.keys(menuMap).forEach(d => {
-    if (!menuMap[d].hasRice) {
-      warnings.push(d);
-    }
-  });
-
-  if (warnings.length > 0) {
-    const msg = `Advertencia: El menú para las siguientes fechas no incluye "Arroz Blanco" en la categoría Arroces: ${warnings.join(', ')}. Esto bloqueará la selección de Granos.`;
-    console.warn(msg);
-    // Notificar admin
-    const admins = getConfigValue_('ADMIN_EMAILS');
-    if (admins) sendEmail_(admins, "Alerta: Integridad de Menú", msg);
-  }
-}
-
-function updateSheetHeaders_(nextDateStr) {
-  // Actualiza textos visuales en las hojas para referencia de usuarios que entran directo al Sheet
-  const ss = SpreadsheetApp.getActive();
-
-  // 1. Hoja Solicitud (Pedidos)
-  // Nota: "Solicitud" en el prompt original se refiere a donde piden. Aquí es "Pedidos".
-  // Si existiera una hoja UI legacy llamada "Solicitud", la actualizaríamos.
-  // Como usamos "Pedidos" como DB, actualizaremos una celda de info si existe, o creamos un log.
-  // Asumiremos que el usuario podría ver la hoja Menu.
-
-  // 2. Hoja Menu
-  const mSh = ss.getSheetByName('Menu');
-  if (mSh) {
-    // Intentar poner un texto descriptivo en la fila 1 si hay espacio o en una celda libre
-    // El requerimiento dice: "Menú del [lunes] al [viernes]..."
-    // Calculamos inicio y fin de esa semana
-    const d = new Date(nextDateStr + 'T12:00:00');
-    const day = d.getDay(); // 0-6
-    const diffToMon = d.getDate() - day + (day == 0 ? -6 : 1); // adjust when day is sunday
-    const monday = new Date(d.setDate(diffToMon));
-    const friday = new Date(d.setDate(monday.getDate() + 4));
-
-    const text = `Menú de la semana: ${formatDate_(monday)} al ${formatDate_(friday)}`;
-    // Lo ponemos en una nota o celda A1 si es posible sin romper headers.
-    // Como A1 son headers, lo ponemos como Nota en A1.
-    mSh.getRange('A1').setNote(text);
-  }
-}
-
-// === DATA ACCESS HELPERS ===
-
-function getOrdersByDate_(dateStr) {
-  const sh = SpreadsheetApp.getActive().getSheetByName('Pedidos');
-  const data = sh.getDataRange().getValues();
-  const list = [];
-  for (let i = 1; i < data.length; i++) {
-    const rowDate = formatDate_(new Date(data[i][2]));
-    if (rowDate === dateStr && data[i][8] !== 'CANCELADO') {
-      list.push({
-        nombre: data[i][4],
-        departamento: data[i][5],
-        resumen: data[i][6]
-      });
-    }
-  }
-  return list;
-}
-
-function getUserInfo_(targetEmail) {
-  const email = targetEmail ? targetEmail.toLowerCase() : Session.getActiveUser().getEmail().toLowerCase();
-  const sh = SpreadsheetApp.getActive().getSheetByName('Usuarios');
-  const data = sh.getDataRange().getValues();
-  for (let i = 1; i < data.length; i++) {
-    if (String(data[i][0]).toLowerCase() === email) {
-      return {
-        email: data[i][0],
-        nombre: data[i][1],
-        departamento: data[i][2],
-        rol: data[i][3],
-        estado: data[i][4]
-      };
-    }
-  }
-  return null;
-}
-
-function getUsersByDept_(dept) {
-  const sh = SpreadsheetApp.getActive().getSheetByName('Usuarios');
-  const data = sh.getDataRange().getValues();
-  const users = [];
-  for (let i = 1; i < data.length; i++) {
-    if (data[i][2] === dept && data[i][4] === 'ACTIVO') {
-       users.push({
-         email: data[i][0],
-         nombre: data[i][1]
-       });
-    }
-  }
-  return users;
-}
-
-function getMenuByDate_(dateStr) {
-  const sh = SpreadsheetApp.getActive().getSheetByName('Menu');
-  const data = sh.getDataRange().getValues();
-  const menu = {};
-  for (let i = 1; i < data.length; i++) {
-    const rowDate = formatDate_(new Date(data[i][1]));
-    if (rowDate === dateStr && String(data[i][5]).toUpperCase() === 'SI') {
-      const cat = data[i][2];
-      if (!menu[cat]) menu[cat] = [];
-      menu[cat].push({ id: data[i][0], plato: data[i][3], desc: data[i][4] });
-    }
-  }
-  return menu;
-}
-
-function getAllMenus_(availableDates) {
-  const sh = SpreadsheetApp.getActive().getSheetByName('Menu');
-  const data = sh.getDataRange().getValues();
-  const menuMap = {}; // { dateStr: { cat: [items] } }
-
-  // Initialize map
-  const validDates = new Set(availableDates.map(d => d.value));
-  availableDates.forEach(d => {
-    menuMap[d.value] = {};
-  });
-
-  for (let i = 1; i < data.length; i++) {
-    const rowDate = formatDate_(new Date(data[i][1]));
-    if (validDates.has(rowDate) && String(data[i][5]).toUpperCase() === 'SI') {
-      const cat = data[i][2];
-      const item = { id: data[i][0], plato: data[i][3], desc: data[i][4] };
-
-      if (!menuMap[rowDate][cat]) menuMap[rowDate][cat] = [];
-      menuMap[rowDate][cat].push(item);
-    }
-  }
-  return menuMap;
-}
-
-function getUserPrefs_(email) {
-  const sh = SpreadsheetApp.getActive().getSheetByName('Usuarios');
-  const data = sh.getDataRange().getValues();
-  for (let i = 1; i < data.length; i++) {
-    if (String(data[i][0]).toLowerCase() === email) {
-      return JSON.parse(data[i][5] || '{}');
-    }
-  }
-  return {};
-}
-
-function getAllUserOrders_(email, availableDates) {
-  const sh = SpreadsheetApp.getActive().getSheetByName('Pedidos');
-  const data = sh.getDataRange().getValues();
-  const ordersMap = {};
-
-  const validDates = new Set(availableDates.map(d => d.value));
-
-  for (let i = 1; i < data.length; i++) {
-    const rowDate = formatDate_(new Date(data[i][2]));
-    // Check if it's one of the relevant dates AND belongs to user AND not canceled
-    if (validDates.has(rowDate) &&
-        String(data[i][3]).toLowerCase() === email &&
-        data[i][8] !== 'CANCELADO') {
-      ordersMap[rowDate] = { id: data[i][0], resumen: data[i][6], detalle: JSON.parse(data[i][7] || '{}') };
-    }
-  }
-  return ordersMap;
-}
-
-function getOrderByUserDate_(email, dateStr) {
-  const sh = SpreadsheetApp.getActive().getSheetByName('Pedidos');
-  const data = sh.getDataRange().getValues();
-  for (let i = data.length - 1; i >= 1; i--) {
-    const rowDate = formatDate_(new Date(data[i][2]));
-    if (rowDate === dateStr && String(data[i][3]).toLowerCase() === email) {
-      return { id: data[i][0], resumen: data[i][6], detalle: JSON.parse(data[i][7] || '{}') };
-    }
-  }
-  return null;
-}
-
-function saveOrderToSheet_(user, dateStr, selection, creatorEmail) {
-  const sh = SpreadsheetApp.getActive().getSheetByName('Pedidos');
-  const data = sh.getDataRange().getValues();
-  let rowIdx = -1;
-  for (let i = 1; i < data.length; i++) {
-    const rowDate = formatDate_(new Date(data[i][2]));
-    if (rowDate === dateStr && String(data[i][3]).toLowerCase() === user.email) {
-      rowIdx = i + 1;
-      break;
-    }
-  }
-  const id = rowIdx > 0 ? data[rowIdx - 1][0] : Utilities.getUuid();
-  const now = new Date();
-  // Col 12: creado_por
-  const rowData = [
-    id, now, dateStr, user.email, user.nombre, user.departamento,
-    selection.items.join(', '), JSON.stringify(selection), 'ACTIVO', now,
-    creatorEmail || user.email
-  ];
-  if (rowIdx > 0) {
-    // Check if extra column exists, if not append logic might need adjustment but setValues handles arrays.
-    // If table grew, setValues might write partial if range is small?
-    // We should get range based on rowData length
-    sh.getRange(rowIdx, 1, 1, rowData.length).setValues([rowData]);
-  } else {
-    sh.appendRow(rowData);
-  }
-}
-
-function getDepartmentStats_(dateStr, deptFilter) {
-  const departmentStats = { total: 0, byUser: [] };
-  const orders = getOrdersByDate_(dateStr);
-  orders.forEach(o => {
-    if (!deptFilter || o.departamento === deptFilter) {
-      departmentStats.total++;
-      departmentStats.byUser.push({ nombre: o.nombre, pedido: o.resumen, depto: o.departamento });
-    }
-  });
-  return departmentStats;
-}
-
-function validateOrderRules_(sel) {
-  const cats = sel.categorias || [];
-  const items = sel.items || [];
-  const specialList = ['Vegetariana', 'Caldo', 'Opcion_Rapida'];
-  const hasSpecial = cats.some(c => specialList.includes(c));
-  if (hasSpecial && cats.length > 1) {
-     const uniqueCats = [...new Set(cats)];
-     if (uniqueCats.some(c => !specialList.includes(c))) {
-       throw new Error("Platos especiales no se pueden combinar con el menú regular.");
-     }
-  }
-  if (cats.includes('Granos')) {
-    const hasWhiteRice = items.some(i => i.toLowerCase().includes('arroz blanco'));
-    if (!hasWhiteRice) throw new Error("Los granos requieren seleccionar Arroz Blanco.");
-  }
-  if (cats.includes('Arroces') && cats.includes('Viveres')) {
-    throw new Error("No puedes combinar Arroz y Víveres.");
-  }
-}
-
-// === API ADMINISTRACIÓN ===
+// === ADMIN API ===
 
 function apiGetAdminData() {
   try {
@@ -744,19 +295,20 @@ function apiGetAdminData() {
       return { ok: false, msg: "Acceso denegado." };
     }
 
-    const data = { ok: true, rol: user.rol, dept: user.departamento };
+    const data = { ok: true, rol: user.rol, dept: user.departamentoId }; // Send ID
+    const deptMap = getDepartmentMap_();
 
-    // 1. Usuarios
+    // Users
     const uSh = SpreadsheetApp.getActive().getSheetByName('Usuarios');
-    const uData = uSh.getDataRange().getValues();
-    data.users = uData.slice(1).map(r => ({
-      email: r[0], nombre: r[1], departamento: r[2], rol: r[3], estado: r[4]
-    })).filter(u => user.rol === 'ADMIN_GEN' || (u.departamento && user.departamento && String(u.departamento).trim() === String(user.departamento).trim()));
+    data.users = uSh.getDataRange().getValues().slice(1).map(r => ({
+      email: r[0], nombre: r[1],
+      departamentoId: r[2], departamento: deptMap[r[2]] || r[2], // Resolve for display
+      rol: r[3], estado: r[4]
+    })).filter(u => user.rol === 'ADMIN_GEN' || (u.departamentoId === user.departamentoId));
 
-    // 2. Pedidos
+    // Orders
     const pSh = SpreadsheetApp.getActive().getSheetByName('Pedidos');
-    const pData = pSh.getDataRange().getValues();
-    data.orders = pData.slice(1)
+    data.orders = pSh.getDataRange().getValues().slice(1)
       .filter(r => {
          if (!r[2]) return false;
          try {
@@ -768,39 +320,27 @@ function apiGetAdminData() {
       })
       .map(r => ({
          id: r[0], date: formatDate_(new Date(r[2])), email: r[3], nombre: r[4],
-         dept: r[5], resumen: r[6], estado: r[8], creado_por: r[10] || ''
+         deptId: r[5], dept: deptMap[r[5]] || r[5], // Resolve
+         resumen: r[6], estado: r[8], creado_por: r[10] || ''
       }))
-      .filter(o => user.rol === 'ADMIN_GEN' || (o.dept && user.departamento && String(o.dept).trim() === String(user.departamento).trim()));
+      .filter(o => user.rol === 'ADMIN_GEN' || (o.deptId === user.departamentoId));
 
+    // Config & Holidays (Admin Gen only)
     if (user.rol === 'ADMIN_GEN') {
        data.config = getConfigValue_('ALL');
-       // Ensure config values are strings to prevent serialization errors
-       for (const k in data.config) {
-          data.config[k] = String(data.config[k]);
-       }
+       for (const k in data.config) data.config[k] = String(data.config[k]);
        data.configKeys = Object.keys(data.config);
 
-       const hSh = SpreadsheetApp.getActive().getSheetByName('DiasLibres');
-       if (hSh) {
-          data.holidays = hSh.getDataRange().getValues().slice(1)
-             .filter(r => r[0])
-             .map(r => {
-                try { return { date: formatDate_(new Date(r[0])), desc: r[1] }; }
-                catch(e) { return null; }
-             })
-             .filter(h => h);
-       }
+       data.holidays = getHolidaysList_();
     }
 
-    data.departments = getDepartmentsList_();
+    data.departments = getDepartmentsList_(); // Returns {id, nombre...}
 
     return data;
   } catch (e) {
     return { ok: false, msg: e.message };
   }
 }
-
-// === NEW ADMIN ENDPOINTS ===
 
 function apiSaveConfig(configData) {
    try {
@@ -819,9 +359,7 @@ function apiSaveConfig(configData) {
      }
      _configCache = null;
      return { ok: true };
-   } catch (e) {
-     return { ok: false, msg: e.message };
-   }
+   } catch (e) { return { ok: false, msg: e.message }; }
 }
 
 function apiSaveDepartment(dept) {
@@ -831,80 +369,59 @@ function apiSaveDepartment(dept) {
 
      const ss = SpreadsheetApp.getActive();
      let sh = ss.getSheetByName('Departamentos');
-     if (!sh) {
-        sh = ss.insertSheet('Departamentos');
-        sh.appendRow(['id', 'nombre', 'admins', 'estado', 'preferencias_json']);
-     }
+     if (!sh) { sh = ss.insertSheet('Departamentos'); /* Headers... assumed setup */ }
 
      const data = sh.getDataRange().getValues();
-     let rowIdx = -1;
 
+     // Check for duplicate name
+     const normName = dept.nombre.trim().toLowerCase();
+     for(let i=1; i<data.length; i++) {
+        if (String(data[i][1]).trim().toLowerCase() === normName && String(data[i][0]) !== String(dept.id)) {
+           throw new Error("Ya existe un departamento con ese nombre.");
+        }
+     }
+
+     let rowIdx = -1;
      if (dept.id) {
         for(let i=1; i<data.length; i++) {
-           if (String(data[i][0]) === String(dept.id)) {
-              rowIdx = i+1;
-              break;
-           }
+           if (String(data[i][0]) === String(dept.id)) { rowIdx = i+1; break; }
         }
      }
 
      const id = rowIdx > 0 ? dept.id : Utilities.getUuid();
      const rowContent = [id, dept.nombre, dept.admins, dept.estado || 'ACTIVO', '{}'];
 
-     if (rowIdx > 0) {
-        sh.getRange(rowIdx, 1, 1, rowContent.length).setValues([rowContent]);
-     } else {
-        sh.appendRow(rowContent);
-     }
+     if (rowIdx > 0) sh.getRange(rowIdx, 1, 1, rowContent.length).setValues([rowContent]);
+     else sh.appendRow(rowContent);
+
      return { ok: true };
-   } catch (e) {
-     return { ok: false, msg: e.message };
-   }
+   } catch (e) { return { ok: false, msg: e.message }; }
 }
 
 function apiDeleteDepartment(deptId) {
    try {
      const admin = getUserInfo_();
      if (!admin || admin.rol !== 'ADMIN_GEN') throw new Error("Permiso denegado.");
-
      const ss = SpreadsheetApp.getActive();
      const sh = ss.getSheetByName('Departamentos');
      const data = sh.getDataRange().getValues();
-
      for(let i=1; i<data.length; i++) {
         if (String(data[i][0]) === String(deptId)) {
            sh.deleteRow(i+1);
            return { ok: true };
         }
      }
-     return { ok: false, msg: "Departamento no encontrado" };
-   } catch (e) {
-     return { ok: false, msg: e.message };
-   }
-}
-
-function getDepartmentsList_() {
-   const ss = SpreadsheetApp.getActive();
-   const sh = ss.getSheetByName('Departamentos');
-   if (!sh) {
-      // Fallback: extract from Users if Dept sheet empty or missing
-      const uSh = ss.getSheetByName('Usuarios');
-      const uData = uSh.getDataRange().getValues();
-      const depts = new Set();
-      for(let i=1; i<uData.length; i++) if(uData[i][2]) depts.add(uData[i][2]);
-      return Array.from(depts).map(d => ({ id: d, nombre: d, estado: 'ACTIVO' }));
-   }
-   const data = sh.getDataRange().getValues();
-   return data.slice(1).map(r => ({ id: r[0], nombre: r[1], admins: r[2], estado: r[3] }));
+     return { ok: false, msg: "No encontrado" };
+   } catch (e) { return { ok: false, msg: e.message }; }
 }
 
 function apiAdminSaveUser(userData) {
   const admin = getUserInfo_();
   if (!admin || !['ADMIN_GEN', 'ADMIN_DEP'].includes(admin.rol)) throw new Error("Denegado");
 
-  // Validate Dept
-  if (admin.rol === 'ADMIN_DEP' && userData.departamento !== admin.departamento) {
-     throw new Error("No puedes agregar usuarios a otro departamento.");
+  // If Admin Dep, force dept ID
+  if (admin.rol === 'ADMIN_DEP') {
+     userData.departamento = admin.departamentoId;
   }
 
   const ss = SpreadsheetApp.getActive();
@@ -914,62 +431,53 @@ function apiAdminSaveUser(userData) {
 
   for(let i=1; i<data.length; i++) {
      if (String(data[i][0]).toLowerCase() === String(userData.email).toLowerCase()) {
-        rowIdx = i+1;
-        break;
+        rowIdx = i+1; break;
      }
   }
 
   const rowContent = [
      userData.email.toLowerCase(),
      userData.nombre,
-     userData.departamento,
+     userData.departamento, // This assumes ID is passed
      userData.rol || 'USER',
      userData.estado || 'ACTIVO',
      (rowIdx > 0 ? data[rowIdx-1][5] : '{}')
   ];
 
-  if (rowIdx > 0) {
-     sh.getRange(rowIdx, 1, 1, 5).setValues([rowContent.slice(0,5)]);
-  } else {
-     sh.appendRow(rowContent);
-  }
+  if (rowIdx > 0) sh.getRange(rowIdx, 1, 1, 5).setValues([rowContent.slice(0,5)]);
+  else sh.appendRow(rowContent);
+
   return { ok: true };
 }
 
 function apiAdminDeleteUser(email) {
    const admin = getUserInfo_();
    if (!admin || !['ADMIN_GEN', 'ADMIN_DEP'].includes(admin.rol)) throw new Error("Permiso denegado.");
-
    const ss = SpreadsheetApp.getActive();
    const sh = ss.getSheetByName('Usuarios');
    const data = sh.getDataRange().getValues();
-
    for(let i=1; i<data.length; i++) {
       if (String(data[i][0]).toLowerCase() === String(email).toLowerCase()) {
-         if (admin.rol === 'ADMIN_DEP' && data[i][2] !== admin.departamento) throw new Error("Denegado: Usuario de otro departamento.");
+         if (admin.rol === 'ADMIN_DEP' && data[i][2] !== admin.departamentoId) throw new Error("Denegado");
          sh.getRange(i+1, 5).setValue('INACTIVO');
          return { ok: true };
       }
    }
-   return { ok: false, msg: "Usuario no encontrado" };
+   return { ok: false, msg: "No encontrado" };
 }
 
 function apiAdminCancelOrder(orderId) {
   const admin = getUserInfo_();
   if (!admin || !['ADMIN_GEN', 'ADMIN_DEP'].includes(admin.rol)) throw new Error("Permiso denegado.");
-
   const ss = SpreadsheetApp.getActive();
   const sh = ss.getSheetByName('Pedidos');
   const rows = sh.getDataRange().getValues();
-
   for (let i = 1; i < rows.length; i++) {
     if (String(rows[i][0]) === String(orderId)) {
-       // Check Dept Scope
-       const orderDept = rows[i][5];
-       if (admin.rol === 'ADMIN_DEP' && orderDept !== admin.departamento) {
-          throw new Error("No puedes cancelar pedidos de otro departamento.");
+       const orderDeptId = rows[i][5];
+       if (admin.rol === 'ADMIN_DEP' && orderDeptId !== admin.departamentoId) {
+          throw new Error("Denegado: Pedido de otro departamento.");
        }
-
        sh.deleteRow(i + 1);
        return { ok: true };
     }
@@ -977,10 +485,252 @@ function apiAdminCancelOrder(orderId) {
   return { ok: false, msg: "Pedido no encontrado." };
 }
 
+// === MENU MANAGEMENT API ===
+
+function apiGetMenuDay(dateStr) {
+   const admin = getUserInfo_();
+   if (!admin || admin.rol !== 'ADMIN_GEN') throw new Error("Denegado");
+
+   const sh = SpreadsheetApp.getActive().getSheetByName('Menu');
+   const data = sh.getDataRange().getValues();
+   const items = [];
+   const fDate = formatDate_(new Date(dateStr));
+
+   for(let i=1; i<data.length; i++) {
+      const rowDate = formatDate_(new Date(data[i][1]));
+      if (rowDate === fDate) {
+         items.push({ id: data[i][0], cat: data[i][2], plato: data[i][3], desc: data[i][4], hab: data[i][5] });
+      }
+   }
+   return { ok: true, items: items };
+}
+
+function apiSaveMenuItem(dateStr, cat, itemData) {
+   const admin = getUserInfo_();
+   if (!admin || admin.rol !== 'ADMIN_GEN') throw new Error("Denegado");
+
+   const sh = SpreadsheetApp.getActive().getSheetByName('Menu');
+   const data = sh.getDataRange().getValues();
+   let rowIdx = -1;
+
+   if (itemData.id) {
+      for(let i=1; i<data.length; i++) {
+         if (String(data[i][0]) === String(itemData.id)) { rowIdx = i+1; break; }
+      }
+   }
+
+   const id = rowIdx > 0 ? itemData.id : Utilities.getUuid();
+   const row = [id, dateStr, cat, itemData.plato, itemData.desc, 'SI'];
+
+   if (rowIdx > 0) sh.getRange(rowIdx, 1, 1, row.length).setValues([row]);
+   else sh.appendRow(row);
+
+   return { ok: true };
+}
+
+function apiDeleteMenuItem(id) {
+   const admin = getUserInfo_();
+   if (!admin || admin.rol !== 'ADMIN_GEN') throw new Error("Denegado");
+   const sh = SpreadsheetApp.getActive().getSheetByName('Menu');
+   const data = sh.getDataRange().getValues();
+   for(let i=1; i<data.length; i++) {
+      if (String(data[i][0]) === String(id)) {
+         sh.deleteRow(i+1);
+         return { ok: true };
+      }
+   }
+   return { ok: false, msg: "No encontrado" };
+}
+
+// === HOLIDAYS API ===
+
+function apiGetHolidays() {
+   return { ok: true, holidays: getHolidaysList_() };
+}
+
+function apiSaveHoliday(dateStr, desc) {
+   const admin = getUserInfo_();
+   if (!admin || admin.rol !== 'ADMIN_GEN') throw new Error("Denegado");
+   const sh = SpreadsheetApp.getActive().getSheetByName('DiasLibres');
+   const data = sh.getDataRange().getValues();
+   // Check duplicate
+   for(let i=1; i<data.length; i++) {
+      if (formatDate_(new Date(data[i][0])) === dateStr) {
+         sh.getRange(i+1, 2).setValue(desc);
+         return { ok: true };
+      }
+   }
+   sh.appendRow([dateStr, desc]);
+   CacheService.getScriptCache().remove('HOLIDAYS_CACHE_V2');
+   return { ok: true };
+}
+
+function apiDeleteHoliday(dateStr) {
+   const admin = getUserInfo_();
+   if (!admin || admin.rol !== 'ADMIN_GEN') throw new Error("Denegado");
+   const sh = SpreadsheetApp.getActive().getSheetByName('DiasLibres');
+   const data = sh.getDataRange().getValues();
+   for(let i=1; i<data.length; i++) {
+      if (formatDate_(new Date(data[i][0])) === dateStr) {
+         sh.deleteRow(i+1);
+         CacheService.getScriptCache().remove('HOLIDAYS_CACHE_V2');
+         return { ok: true };
+      }
+   }
+   return { ok: false };
+}
+
 // === UTILS ===
 
-let _configCache = null;
+function getUserInfo_(targetEmail) {
+  const email = targetEmail ? targetEmail.toLowerCase() : Session.getActiveUser().getEmail().toLowerCase();
+  const sh = SpreadsheetApp.getActive().getSheetByName('Usuarios');
+  const data = sh.getDataRange().getValues();
+  const deptMap = getDepartmentMap_();
 
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][0]).toLowerCase() === email) {
+      const deptId = data[i][2];
+      return {
+        email: data[i][0],
+        nombre: data[i][1],
+        departamentoId: deptId,
+        departamento: deptMap[deptId] || deptId, // Resolve name
+        rol: data[i][3],
+        estado: data[i][4]
+      };
+    }
+  }
+  return null;
+}
+
+function getDepartmentMap_() {
+   const sh = SpreadsheetApp.getActive().getSheetByName('Departamentos');
+   const map = {};
+   if (sh) {
+      const data = sh.getDataRange().getValues();
+      for(let i=1; i<data.length; i++) {
+         map[data[i][0]] = data[i][1]; // ID -> Name
+      }
+   }
+   return map;
+}
+
+function getDepartmentsList_() {
+   const sh = SpreadsheetApp.getActive().getSheetByName('Departamentos');
+   if (!sh) return [];
+   const data = sh.getDataRange().getValues();
+   return data.slice(1).map(r => ({ id: r[0], nombre: r[1], admins: r[2], estado: r[3] }));
+}
+
+function getUsersByDept_(deptId) {
+  const sh = SpreadsheetApp.getActive().getSheetByName('Usuarios');
+  const data = sh.getDataRange().getValues();
+  const users = [];
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][2] === deptId && data[i][4] === 'ACTIVO') {
+       users.push({ email: data[i][0], nombre: data[i][1] });
+    }
+  }
+  return users;
+}
+
+function isDateOpenForOrdering_(targetDateStr, holidaysSet) {
+  if (!holidaysSet) holidaysSet = getHolidaysSet_();
+  const now = new Date();
+  const targetDate = new Date(targetDateStr + 'T12:00:00');
+
+  if (targetDate <= now) return false;
+
+  const day = targetDate.getDay();
+  if (day === 0 || day === 6) return false;
+  if (holidaysSet.has(targetDateStr)) return false;
+
+  const prevBizDay = getPreviousBusinessDay_(targetDate, holidaysSet);
+  const prevBizDayStr = formatDate_(prevBizDay);
+  const todayStr = formatDate_(now);
+
+  // If today is the cutoff day
+  if (todayStr === prevBizDayStr) {
+    const envioTime = getConfigValue_('HORA_ENVIO') || '15:00';
+    const minutesBefore = parseInt(getConfigValue_('MINUTOS_PREV_CIERRE') || '30', 10);
+
+    let [h, m] = envioTime.split(':').map(Number);
+
+    // Subtract minutes
+    const limit = new Date();
+    limit.setHours(h, m, 0, 0);
+    limit.setMinutes(limit.getMinutes() - minutesBefore);
+
+    if (now > limit) return false;
+  }
+
+  // If today is past the cutoff day
+  const zeroNow = new Date(now); zeroNow.setHours(0,0,0,0);
+  const zeroPrev = new Date(prevBizDay); zeroPrev.setHours(0,0,0,0);
+  if (zeroNow > zeroPrev) return false;
+
+  return true;
+}
+
+function backupOrdersToDrive_(dateStr) {
+  let rootId = getConfigValue_('BACKUP_FOLDER_ID');
+
+  if (!rootId) {
+     try {
+        const ssFile = DriveApp.getFileById(SpreadsheetApp.getActive().getId());
+        const parents = ssFile.getParents();
+        if (parents.hasNext()) {
+           const parent = parents.next();
+           const newFolder = parent.createFolder('Backups_Almuerzo');
+           rootId = newFolder.getId();
+           // Update Config
+           const cSh = SpreadsheetApp.getActive().getSheetByName('Config');
+           const data = cSh.getDataRange().getValues();
+           for(let i=1; i<data.length; i++) {
+              if (data[i][0] === 'BACKUP_FOLDER_ID') {
+                 cSh.getRange(i+1, 2).setValue(rootId);
+                 break;
+              }
+           }
+           _configCache = null; // Invalidate cache
+        }
+     } catch(e) {
+        console.error("No se pudo crear carpeta backup: " + e.message);
+        return;
+     }
+  }
+
+  const ss = SpreadsheetApp.getActive();
+  const sh = ss.getSheetByName('Pedidos');
+  const data = sh.getDataRange().getValues();
+
+  const filtered = data.filter((row, i) => i === 0 || formatDate_(new Date(row[2])) === dateStr);
+  if (filtered.length <= 1) return;
+
+  try {
+    const rootFolder = DriveApp.getFolderById(rootId);
+    const d = new Date(dateStr + 'T12:00:00');
+    const year = String(d.getFullYear());
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+
+    let yFolder = rootFolder.getFoldersByName(year).hasNext() ? rootFolder.getFoldersByName(year).next() : rootFolder.createFolder(year);
+    let mFolder = yFolder.getFoldersByName(month).hasNext() ? yFolder.getFoldersByName(month).next() : yFolder.createFolder(month);
+
+    const tempSheet = SpreadsheetApp.create(`Pedidos_${dateStr}`);
+    tempSheet.getSheets()[0].getRange(1, 1, filtered.length, filtered[0].length).setValues(filtered);
+    const tempFile = DriveApp.getFileById(tempSheet.getId());
+
+    tempFile.moveTo(mFolder);
+    const pdfBlob = tempFile.getAs('application/pdf');
+    mFolder.createFile(pdfBlob).setName(`Pedidos_${dateStr}.pdf`);
+  } catch (e) {
+    console.error("Error backup: " + e.message);
+  }
+}
+
+// Helpers reused...
+let _configCache = null;
 function getConfigValue_(key) {
   if (!_configCache) {
     _configCache = {};
@@ -996,35 +746,36 @@ function getConfigValue_(key) {
   return _configCache[key] !== undefined ? _configCache[key] : '';
 }
 
+function getHolidaysList_() {
+   const sh = SpreadsheetApp.getActive().getSheetByName('DiasLibres');
+   if(!sh) return [];
+   return sh.getDataRange().getValues().slice(1)
+      .filter(r => r[0])
+      .map(r => {
+         try { return { date: formatDate_(new Date(r[0])), desc: r[1] }; }
+         catch(e) { return null; }
+      })
+      .filter(h => h && h.date >= formatDate_(new Date())); // Only future for list
+}
+
 function getHolidaysSet_() {
   const cache = CacheService.getScriptCache();
   const cachedHolidays = cache.get('HOLIDAYS_CACHE_V2');
-
-  if (cachedHolidays) {
-    return new Set(JSON.parse(cachedHolidays));
-  }
+  if (cachedHolidays) return new Set(JSON.parse(cachedHolidays));
 
   const set = new Set();
-  const ss = SpreadsheetApp.getActive();
-  const sh = ss.getSheetByName('DiasLibres');
-  if (sh && sh.getLastRow() > 1) {
-    sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues().forEach(r => {
-      if (r[0]) set.add(formatDate_(new Date(r[0])));
-    });
-  }
+  const list = getHolidaysList_(); // uses sheet
+  list.forEach(h => set.add(h.date));
+
   try {
     const calId = 'es.do#holiday@group.v.calendar.google.com';
     const now = new Date();
     const start = new Date(now.getTime() - 30 * 86400000);
     const end = new Date(now.getTime() + 365 * 86400000);
     CalendarApp.getCalendarById(calId).getEvents(start, end).forEach(e => set.add(formatDate_(e.getStartTime())));
-  } catch (e) {
-    console.error('Error fetching calendar holidays: ' + e.message);
-  }
+  } catch (e) {}
 
-  // Cache for 6 hours
   cache.put('HOLIDAYS_CACHE_V2', JSON.stringify(Array.from(set)), 21600);
-
   return set;
 }
 
@@ -1071,4 +822,176 @@ function getSignatureDataUrl_() {
     cache.put('SIG_V3_PROD', dataUrl, 21600);
     return dataUrl;
   } catch (e) { return ''; }
+}
+
+function getAvailableMenuDates_(fetchAll) {
+  const ss = SpreadsheetApp.getActive();
+  const menuSh = ss.getSheetByName('Menu');
+  const data = menuSh.getRange(2, 1, menuSh.getLastRow()-1, 2).getValues();
+  const now = new Date();
+  const todayStr = formatDate_(now);
+  const datesSet = new Set();
+  data.forEach(r => {
+    const dStr = formatDate_(new Date(r[1]));
+    if (dStr >= todayStr) datesSet.add(dStr);
+  });
+  const sorted = Array.from(datesSet).sort();
+  const holidays = getHolidaysSet_();
+  const valid = [];
+  sorted.forEach(dStr => {
+    if (isDateOpenForOrdering_(dStr, holidays)) {
+      valid.push({ value: dStr, label: formatDisplayDate_(dStr) });
+    }
+  });
+  return valid;
+}
+
+function getAllMenus_(availableDates) {
+  const sh = SpreadsheetApp.getActive().getSheetByName('Menu');
+  const data = sh.getDataRange().getValues();
+  const menuMap = {};
+  const validDates = new Set(availableDates.map(d => d.value));
+  availableDates.forEach(d => { menuMap[d.value] = {}; });
+  for (let i = 1; i < data.length; i++) {
+    const rowDate = formatDate_(new Date(data[i][1]));
+    if (validDates.has(rowDate) && String(data[i][5]).toUpperCase() === 'SI') {
+      const cat = data[i][2];
+      const item = { id: data[i][0], plato: data[i][3], desc: data[i][4] };
+      if (!menuMap[rowDate][cat]) menuMap[rowDate][cat] = [];
+      menuMap[rowDate][cat].push(item);
+    }
+  }
+  return menuMap;
+}
+
+function getAllUserOrders_(email, availableDates) {
+  const sh = SpreadsheetApp.getActive().getSheetByName('Pedidos');
+  const data = sh.getDataRange().getValues();
+  const ordersMap = {};
+  const validDates = new Set(availableDates.map(d => d.value));
+  for (let i = 1; i < data.length; i++) {
+    const rowDate = formatDate_(new Date(data[i][2]));
+    if (validDates.has(rowDate) && String(data[i][3]).toLowerCase() === email && data[i][8] !== 'CANCELADO') {
+      ordersMap[rowDate] = { id: data[i][0], resumen: data[i][6], detalle: JSON.parse(data[i][7] || '{}') };
+    }
+  }
+  return ordersMap;
+}
+
+function getUserPrefs_(email) {
+  const sh = SpreadsheetApp.getActive().getSheetByName('Usuarios');
+  const data = sh.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][0]).toLowerCase() === email) {
+      return JSON.parse(data[i][5] || '{}');
+    }
+  }
+  return {};
+}
+
+function getDepartmentStats_(dateStr, deptIdFilter) {
+  const departmentStats = { total: 0, byUser: [] };
+  const orders = getOrdersByDate_(dateStr);
+  orders.forEach(o => {
+    // Check ID
+    if (!deptIdFilter || o.departamentoId === deptIdFilter) {
+      departmentStats.total++;
+      departmentStats.byUser.push({ nombre: o.nombre, pedido: o.resumen, depto: o.departamento });
+    }
+  });
+  return departmentStats;
+}
+
+function getOrdersByDate_(dateStr) {
+  const sh = SpreadsheetApp.getActive().getSheetByName('Pedidos');
+  const data = sh.getDataRange().getValues();
+  const deptMap = getDepartmentMap_();
+  const list = [];
+  for (let i = 1; i < data.length; i++) {
+    const rowDate = formatDate_(new Date(data[i][2]));
+    if (rowDate === dateStr && data[i][8] !== 'CANCELADO') {
+      list.push({
+        nombre: data[i][4],
+        departamentoId: data[i][5],
+        departamento: deptMap[data[i][5]] || data[i][5],
+        resumen: data[i][6]
+      });
+    }
+  }
+  return list;
+}
+
+function validateOrderRules_(sel) {
+  const cats = sel.categorias || [];
+  const items = sel.items || [];
+  const specialList = ['Vegetariana', 'Caldo', 'Opcion_Rapida'];
+  const hasSpecial = cats.some(c => specialList.includes(c));
+  if (hasSpecial && cats.length > 1) {
+     const uniqueCats = [...new Set(cats)];
+     if (uniqueCats.some(c => !specialList.includes(c))) throw new Error("Platos especiales no se pueden combinar con el menú regular.");
+  }
+  if (cats.includes('Granos')) {
+    const hasWhiteRice = items.some(i => i.toLowerCase().includes('arroz blanco'));
+    if (!hasWhiteRice) throw new Error("Los granos requieren seleccionar Arroz Blanco.");
+  }
+  if (cats.includes('Arroces') && cats.includes('Viveres')) throw new Error("No puedes combinar Arroz y Víveres.");
+}
+
+function saveOrderToSheet_(user, dateStr, selection, creatorEmail) {
+  const sh = SpreadsheetApp.getActive().getSheetByName('Pedidos');
+  const data = sh.getDataRange().getValues();
+  let rowIdx = -1;
+  for (let i = 1; i < data.length; i++) {
+    const rowDate = formatDate_(new Date(data[i][2]));
+    if (rowDate === dateStr && String(data[i][3]).toLowerCase() === user.email) {
+      rowIdx = i + 1;
+      break;
+    }
+  }
+  const id = rowIdx > 0 ? data[rowIdx - 1][0] : Utilities.getUuid();
+  const now = new Date();
+
+  // Save ID in col 6 (Index 5)
+  const rowData = [
+    id, now, dateStr, user.email, user.nombre, user.departamentoId,
+    selection.items.join(', '), JSON.stringify(selection), 'ACTIVO', now,
+    creatorEmail || user.email
+  ];
+  if (rowIdx > 0) sh.getRange(rowIdx, 1, 1, rowData.length).setValues([rowData]);
+  else sh.appendRow(rowData);
+}
+
+function checkMenuIntegrity_() {
+  // Same logic as before
+  const ss = SpreadsheetApp.getActive();
+  const mSh = ss.getSheetByName('Menu');
+  const data = mSh.getDataRange().getValues();
+  const menuMap = {};
+  for (let i = 1; i < data.length; i++) {
+    const dStr = formatDate_(new Date(data[i][1]));
+    const cat = data[i][2];
+    const item = String(data[i][3]).toLowerCase();
+    if (dStr > formatDate_(new Date())) {
+      if (!menuMap[dStr]) menuMap[dStr] = { hasRice: false };
+      if (cat === 'Arroces' && item.includes('arroz blanco')) menuMap[dStr].hasRice = true;
+    }
+  }
+  const warnings = [];
+  Object.keys(menuMap).forEach(d => { if (!menuMap[d].hasRice) warnings.push(d); });
+  if (warnings.length > 0) {
+    const admins = getConfigValue_('ADMIN_EMAILS');
+    if (admins) sendEmail_(admins, "Alerta: Integridad de Menú", `Falta arroz blanco: ${warnings.join(', ')}`);
+  }
+}
+
+function sendDailyAdminSummary_(dateStr) {
+  const admins = getConfigValue_('ADMIN_EMAILS');
+  if (!admins) return;
+  const orders = getOrdersByDate_(dateStr);
+  const count = orders.length;
+  if (count > 0) {
+    sendEmail_(admins, `Resumen Pedidos ${dateStr}`,
+      `Se han registrado <b>${count}</b> pedidos para el día ${dateStr}.<br>Respaldo en Drive.`
+    );
+  }
 }
