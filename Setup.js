@@ -14,6 +14,11 @@ function setupSheetsAndConfig(){
       // Roles: USUARIO, ADMIN_DEP, ADMIN_GEN
     },
     {
+      name: 'Departamentos',
+      headers: ['id', 'nombre', 'admins', 'estado', 'preferencias_json']
+      // admins: correos separados por coma (para notificaciones/reportes)
+    },
+    {
       name: 'Menu', 
       headers: ['id', 'fecha', 'categoria', 'plato', 'descripcion', 'habilitado']
       // Categorías: Arroces, Granos, Carnes, Viveres, Ensaladas, Vegetariana, Caldo, Opcion_Rapida
@@ -25,7 +30,8 @@ function setupSheetsAndConfig(){
         'seleccion_resumen', // Texto legible ej: "Arroz B., Pollo, Ensalada"
         'json_detalle',      // Objeto JSON completo para re-edición
         'estado',            // ACTIVO, CANCELADO
-        'timestamp_modificacion'
+        'timestamp_modificacion',
+        'creado_por'         // Email de quien realizó la acción (trazabilidad proxy)
       ]
     },
     {

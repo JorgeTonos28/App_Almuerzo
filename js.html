@@ -9,6 +9,9 @@ createApp({
     
     // Datos del usuario y app
     const user = ref({});
+    const activeUser = ref({});
+    const deptUsers = ref([]);
+    const impersonateEmail = ref('');
     const menu = ref({});
     const myOrder = ref(null);
     const adminData = ref(null);
@@ -23,14 +26,69 @@ createApp({
     
     // Formulario
     const comments = ref('');
-    const selection = reactive(new Set()); // IDs seleccionados
-    const selectionData = reactive({});    // Metadatos de lo seleccionado {id: {cat, plato}}
+    const selection = reactive(new Set());
+    const selectionData = reactive({});
+
+    // ADMIN STATE
+    const viewMode = ref('USER'); // USER | ADMIN
+    const adminState = reactive({
+       loading: false,
+       tab: 'USUARIOS',
+       users: [],
+       orders: [],
+       departments: [],
+       config: {},
+       configKeys: [],
+       holidays: [],
+       userModal: { open: false, isNew: true, data: {} },
+       deptModal: { open: false, isNew: true, data: {} },
+       configEdit: false,
+       filters: {
+          orders: { search: '', dateStart: '', dateEnd: '', status: '', open: false },
+          users: { search: '' }
+       }
+    });
 
     // === COMPUTED PROPERTIES ===
-    const isAdmin = computed(() => user.value.rol && ['ADMIN_GEN', 'ADMIN_DEP'].includes(user.value.rol));
-    const isAdminGen = computed(() => user.value.rol === 'ADMIN_GEN');
+    const isAdmin = computed(() => activeUser.value.rol && ['ADMIN_GEN', 'ADMIN_DEP'].includes(activeUser.value.rol));
+    const isDeptAdmin = computed(() => activeUser.value.rol === 'ADMIN_DEP');
+    const isAdminGen = computed(() => activeUser.value.rol === 'ADMIN_GEN');
     
     const menuLoaded = computed(() => menu.value && Object.keys(menu.value).length > 0);
+
+    // FILTERED LISTS
+    const filteredUsers = computed(() => {
+       const q = adminState.filters.users.search.toLowerCase();
+       if (!q) return adminState.users;
+       return adminState.users.filter(u =>
+          u.nombre.toLowerCase().includes(q) ||
+          u.email.toLowerCase().includes(q) ||
+          u.departamento.toLowerCase().includes(q)
+       );
+    });
+
+    const filteredOrders = computed(() => {
+       const f = adminState.filters.orders;
+       const q = f.search.toLowerCase();
+       return adminState.orders.filter(o => {
+          // Text Search (all fields including Creado Por)
+          if (q && !(
+             o.nombre.toLowerCase().includes(q) ||
+             o.email.toLowerCase().includes(q) ||
+             o.resumen.toLowerCase().includes(q) ||
+             (o.creado_por && o.creado_por.toLowerCase().includes(q))
+          )) return false;
+
+          // Date Range Match
+          if (f.dateStart && o.date < f.dateStart) return false;
+          if (f.dateEnd && o.date > f.dateEnd) return false;
+
+          // Status Match
+          if (f.status && o.estado !== f.status) return false;
+
+          return true;
+       });
+    });
     
     // Orden de categorías para mostrar (puedes ajustar el orden aquí)
     const categoryOrder = ['Arroces', 'Granos', 'Carnes', 'Ensaladas', 'Viveres', 'Vegetariana', 'Caldo', 'Opcion_Rapida'];
@@ -46,6 +104,34 @@ createApp({
     });
     
     const selectedCount = computed(() => selection.size);
+
+    // === SUMMARY TABLE HELPERS ===
+    const summaryHeaders = computed(() => categoryOrder);
+
+    const userWeeklySummary = computed(() => {
+      if (!dates.value.length) return [];
+
+      return dates.value.map(d => {
+        const order = allOrders.value[d.value];
+        const row = { date: d.value, label: d.label, items: {} };
+
+        if (order && order.detalle) {
+          const det = order.detalle;
+          // det.categorias and det.items are parallel arrays
+          if (Array.isArray(det.categorias) && Array.isArray(det.items)) {
+             det.categorias.forEach((cat, idx) => {
+                if (!row.items[cat]) {
+                   row.items[cat] = det.items[idx];
+                } else {
+                   // Append if multiple (e.g. Vegetariana)
+                   row.items[cat] += ', ' + det.items[idx];
+                }
+             });
+          }
+        }
+        return row;
+      });
+    });
 
     const displayDate = computed(() => {
       const d = dates.value.find(x => x.value === currentDate.value);
@@ -169,6 +255,8 @@ createApp({
             }
             // Cargar datos
             user.value = res.user;
+            activeUser.value = res.activeUser || {};
+            deptUsers.value = res.deptUsers || [];
             menu.value = res.menu;
             myOrder.value = res.myOrder;
             allMenus.value = res.allMenus || {};
@@ -191,7 +279,7 @@ createApp({
           loading.value = false;
           alert("Error de conexión con el servidor.");
         })
-        .apiGetInitData(targetDate); // Pasamos la fecha si el usuario hizo clic en un tab
+        .apiGetInitData(targetDate, impersonateEmail.value);
     };
 
     // Cambiar de fecha (Tabs superiores)
@@ -237,9 +325,116 @@ createApp({
       }
     };
 
+    const changeProxyUser = () => {
+       loadData(currentDate.value);
+    };
+
     const toggleReminders = () => {
       remindersEnabled.value = !remindersEnabled.value;
       google.script.run.apiSetUserPreference('reminders', remindersEnabled.value);
+    };
+
+    const toggleAdminView = () => {
+       if (viewMode.value === 'USER') {
+          viewMode.value = 'ADMIN';
+          loadAdminData();
+       } else {
+          viewMode.value = 'USER';
+       }
+    };
+
+    const loadAdminData = () => {
+       adminState.loading = true;
+       google.script.run
+         .withSuccessHandler(res => {
+            adminState.loading = false;
+            if(res.ok) {
+               adminState.users = res.users;
+               adminState.orders = res.orders;
+               adminState.departments = res.departments || [];
+               adminState.config = res.config || {};
+               adminState.configKeys = res.configKeys || [];
+               adminState.holidays = res.holidays || [];
+            } else {
+               alert(res.msg);
+            }
+         })
+         .apiGetAdminData();
+    };
+
+    // Admin Actions
+    const openUserModal = (u = null) => {
+       adminState.userModal.isNew = !u;
+       adminState.userModal.data = u ? { ...u } : { email: '', nombre: '', departamento: activeUser.value.departamento || '', rol: 'USUARIO', estado: 'ACTIVO' };
+       adminState.userModal.open = true;
+    };
+
+    const saveUser = () => {
+       if(!adminState.userModal.data.email || !adminState.userModal.data.nombre) return alert("Faltan datos");
+       adminState.loading = true;
+       google.script.run
+         .withSuccessHandler(res => {
+            adminState.loading = false;
+            if(res.ok) {
+               adminState.userModal.open = false;
+               loadAdminData();
+            } else {
+               alert(res.msg);
+            }
+         })
+         .apiAdminSaveUser(adminState.userModal.data);
+    };
+
+    const toggleUserStatus = (u) => {
+       if(!confirm(`¿${u.estado === 'ACTIVO' ? 'Desactivar' : 'Activar'} a ${u.nombre}?`)) return;
+       const newState = u.estado === 'ACTIVO' ? 'INACTIVO' : 'ACTIVO';
+       // We can reuse saveUser logic or create a dedicated endpoint.
+       // For simplicity, we use apiAdminSaveUser updating just status if the backend supports it,
+       // or we manually constructing the object.
+       const payload = { ...u, estado: newState };
+       adminState.loading = true;
+       google.script.run.withSuccessHandler(() => { loadAdminData(); }).apiAdminSaveUser(payload);
+    };
+
+    const adminCancelOrder = (orderId) => {
+       if(!confirm("¿Cancelar pedido?")) return;
+       adminState.loading = true;
+       google.script.run.withSuccessHandler(res => {
+          if(res.ok) loadAdminData();
+          else { alert(res.msg); adminState.loading = false; }
+       }).apiAdminCancelOrder(orderId);
+    };
+
+    // Department Actions
+    const openDeptModal = (d = null) => {
+       adminState.deptModal.isNew = !d;
+       adminState.deptModal.data = d ? { ...d } : { nombre: '', admins: '', estado: 'ACTIVO' };
+       adminState.deptModal.open = true;
+    };
+
+    const saveDept = () => {
+       if(!adminState.deptModal.data.nombre) return alert("Nombre requerido");
+       adminState.loading = true;
+       google.script.run.withSuccessHandler(res => {
+          adminState.loading = false;
+          if(res.ok) { adminState.deptModal.open = false; loadAdminData(); }
+          else alert(res.msg);
+       }).apiSaveDepartment(adminState.deptModal.data);
+    };
+
+    const deleteDept = (id) => {
+       if(!confirm("¿Eliminar departamento?")) return;
+       google.script.run.withSuccessHandler(res => { if(res.ok) loadAdminData(); else alert(res.msg); }).apiDeleteDepartment(id);
+    };
+
+    // Config Actions
+    const saveConfig = () => {
+       adminState.loading = true;
+       google.script.run.withSuccessHandler(res => {
+          adminState.loading = false;
+          if(res.ok) { adminState.configEdit = false; loadAdminData(); }
+          else alert(res.msg);
+       }).apiSaveConfig(adminState.config);
     };
 
     const dismissBanner = () => {
@@ -254,7 +449,8 @@ createApp({
       
       // Preparamos el objeto para enviar
       const payload = {
-        date: currentDate.value, // FECHA SELECCIONADA
+        date: currentDate.value,
+        impersonateEmail: impersonateEmail.value,
         categorias: Array.from(selection).map(id => selectionData[id].cat),
         items: Array.from(selection).map(id => selectionData[id].plato),
         detalleIds: Array.from(selection),
@@ -309,7 +505,25 @@ createApp({
     
     const scrollToCat = (cat) => {
       const el = document.getElementById('cat-'+cat);
-      if(el) el.scrollIntoView({behavior: 'smooth', block: 'start'});
+      if(el) {
+        // Offset for sticky header
+        const y = el.getBoundingClientRect().top + window.pageYOffset - 140;
+        window.scrollTo({top: y, behavior: 'smooth'});
+      }
+    };
+
+    const getIconForCategory = (cat) => {
+      const map = {
+        'Arroces': 'fa-bowl-rice',
+        'Granos': 'fa-spoon', // Generic
+        'Carnes': 'fa-drumstick-bite',
+        'Ensaladas': 'fa-carrot',
+        'Viveres': 'fa-utensils',
+        'Vegetariana': 'fa-leaf',
+        'Caldo': 'fa-mug-hot',
+        'Opcion_Rapida': 'fa-burger'
+      };
+      return 'fa-solid ' + (map[cat] || 'fa-circle');
     };
 
     // Inicialización
@@ -323,7 +537,7 @@ createApp({
       currentDate, dates, comments,
       
       // Computed
-      isAdmin, isAdminGen, menuLoaded, categories,
+      isAdmin, isDeptAdmin, isAdminGen, menuLoaded, categories,
       selectedCount, validationError, hasBlockingErrors, showGrainWarning,
       displayDate, isCutoffPassed,
       
@@ -332,12 +546,25 @@ createApp({
       
       // Estado
       remindersEnabled, showMultiDayBanner,
+      activeUser, deptUsers, impersonateEmail,
+      viewMode, adminState,
 
       // Acciones Principales
-      changeDate, submitOrder, cancelOrder, toggleReminders, dismissBanner,
+      changeDate, submitOrder, cancelOrder, toggleReminders, dismissBanner, changeProxyUser,
+      toggleAdminView, loadAdminData,
+
+      // Admin Actions
+      openUserModal, saveUser, toggleUserStatus, adminCancelOrder,
+      openDeptModal, saveDept, deleteDept, saveConfig,
       
+      // Filtered Data
+      filteredUsers, filteredOrders,
+
       // UI Utils
-      formatCatName, scrollToCat
+      formatCatName, scrollToCat, getIconForCategory,
+
+      // Summary
+      userWeeklySummary, summaryHeaders
     };
   }
 }).mount('#app');
