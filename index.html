@@ -7,67 +7,145 @@
   <title>Solicitud Almuerzo</title>
   <script src="https://cdn.tailwindcss.com"></script> <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <?!= include('css'); ?>
 </head>
-<body class="bg-gray-50 text-gray-800">
+<body class="bg-gray-50 text-gray-800 antialiased selection:bg-blue-100 selection:text-blue-800">
   <div id="app" class="min-h-screen flex flex-col">
     
-    <header class="bg-blue-700 text-white shadow-md sticky top-0 z-50">
-      <div class="max-w-4xl mx-auto px-4 h-14 flex items-center justify-between">
-        <div class="font-bold text-lg flex items-center gap-2">
-           <i class="fa-solid fa-utensils"></i>
-           <span class="hidden sm:inline">Almuerzo Preempacado</span>
-           <span class="sm:hidden">Almuerzo</span>
+    <!-- Top Tier Header -->
+    <header class="bg-white/80 backdrop-blur-md sticky top-0 z-50 border-b border-gray-200/50 supports-[backdrop-filter]:bg-white/60">
+      <div class="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
+        <!-- Brand / Logo -->
+        <div class="flex items-center gap-3 group cursor-default">
+           <div class="w-10 h-10 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center text-white text-lg shadow-lg shadow-blue-500/30 transition-transform group-hover:scale-105">
+             <i class="fa-solid fa-utensils"></i>
+           </div>
+           <div class="flex flex-col">
+             <span class="font-bold text-gray-900 leading-none tracking-tight">Almuerzo</span>
+             <span class="text-[10px] text-gray-500 font-semibold uppercase tracking-wider mt-0.5">Corporativo</span>
+           </div>
         </div>
-        <div class="flex items-center gap-4">
-           <button @click="toggleReminders" class="text-blue-200 hover:text-white transition-colors" :title="remindersEnabled ? 'Desactivar notificaciones' : 'Activar notificaciones'">
-             <i :class="['fa-solid text-lg', remindersEnabled ? 'fa-bell' : 'fa-bell-slash']"></i>
+
+        <!-- User Actions -->
+        <div class="flex items-center gap-3 md:gap-4">
+
+           <!-- Proxy User Selector (Only for ADMIN_DEP) -->
+           <div v-if="isDeptAdmin && deptUsers.length > 0" class="mr-1">
+              <div class="relative">
+                 <select v-model="impersonateEmail" @change="changeProxyUser"
+                   class="appearance-none bg-indigo-50 border border-indigo-100 text-indigo-700 text-xs font-bold py-2 pl-3 pr-8 rounded-lg cursor-pointer hover:bg-indigo-100 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 max-w-[120px] md:max-w-xs truncate">
+                   <option value="">Yo</option>
+                   <option v-for="u in deptUsers" :key="u.email" :value="u.email">
+                      {{ u.nombre }}
+                   </option>
+                 </select>
+                 <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-indigo-500">
+                    <i class="fa-solid fa-chevron-down text-[10px]"></i>
+                 </div>
+              </div>
+           </div>
+
+           <!-- Admin Panel Button -->
+           <button v-if="isAdmin" @click="toggleAdminView"
+             :class="['w-9 h-9 rounded-full flex items-center justify-center transition-all shadow-md',
+               viewMode === 'ADMIN' ? 'bg-blue-600 text-white ring-2 ring-offset-2 ring-blue-500' : 'bg-gray-900 text-white hover:bg-gray-700']"
+             :title="viewMode === 'ADMIN' ? 'Volver a Pedidos' : 'Panel de Administración'">
+             <i :class="viewMode === 'ADMIN' ? 'fa-solid fa-arrow-left' : 'fa-solid fa-screwdriver-wrench text-xs'"></i>
            </button>
-           <div class="text-xs text-blue-100 flex flex-col items-end">
-             <span class="font-semibold">{{ user.nombre }}</span>
-             <span>{{ user.departamento }}</span>
+
+           <button @click="toggleReminders"
+             :class="['w-9 h-9 rounded-full flex items-center justify-center transition-all focus:outline-none',
+               remindersEnabled ? 'bg-blue-50 text-blue-600 hover:bg-blue-100' : 'bg-gray-100 text-gray-400 hover:bg-gray-200']"
+             :title="remindersEnabled ? 'Notificaciones activas' : 'Notificaciones desactivadas'">
+             <i :class="['fa-solid text-sm', remindersEnabled ? 'fa-bell' : 'fa-bell-slash']"></i>
+           </button>
+
+           <div class="flex items-center gap-3 pl-4 border-l border-gray-200">
+              <div class="text-right hidden sm:block leading-tight">
+                <div class="text-sm font-bold text-gray-900 truncate max-w-[120px]">{{ user.nombre }}</div>
+                <div class="text-[10px] text-gray-500 font-medium uppercase tracking-wide">{{ user.departamento }}</div>
+              </div>
+              <div class="w-9 h-9 bg-gradient-to-br from-gray-100 to-gray-200 text-gray-600 rounded-full flex items-center justify-center font-bold text-sm border-2 border-white shadow-sm ring-1 ring-gray-100">
+                 {{ user.nombre ? user.nombre.charAt(0).toUpperCase() : 'U' }}
+              </div>
            </div>
         </div>
       </div>
     </header>
 
-    <div v-if="loading" class="fixed inset-0 bg-white/80 z-[60] flex flex-col items-center justify-center">
-      <i class="fa-solid fa-circle-notch fa-spin text-4xl text-blue-600 mb-2"></i>
-      <p class="text-sm text-gray-500 font-medium">Cargando...</p>
+    <!-- Loading Overlay -->
+    <div v-if="loading" class="fixed inset-0 bg-white/90 backdrop-blur-sm z-[60] flex flex-col items-center justify-center transition-all duration-300">
+      <div class="relative">
+         <div class="w-16 h-16 border-4 border-blue-100 rounded-full animate-spin border-t-blue-600"></div>
+         <i class="fa-solid fa-utensils absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-blue-600 text-xl"></i>
+      </div>
+      <p class="mt-4 text-sm text-gray-500 font-medium animate-pulse">Preparando menú...</p>
     </div>
 
-    <main class="flex-grow max-w-4xl mx-auto w-full p-4 space-y-6">
+    <main :class="['flex-grow mx-auto w-full p-4 md:p-6 transition-all duration-300', viewMode === 'ADMIN' ? 'max-w-7xl' : 'max-w-4xl space-y-8']">
       
-      <div v-if="showMultiDayBanner" class="bg-indigo-50 border-l-4 border-indigo-500 p-4 rounded-r shadow-sm flex justify-between items-start animate-fade-in">
-        <div class="text-indigo-800 text-sm">
-          <p class="font-bold mb-1"><i class="fa-solid fa-circle-info mr-1"></i> ¡Nuevo!</p>
-          <p>Ahora puedes adelantar tus pedidos para todos los días disponibles. Navega por las fechas arriba.</p>
+      <!-- USER VIEW -->
+      <div v-show="viewMode === 'USER'" class="space-y-8">
+
+      <!-- Hero Section -->
+      <div class="flex justify-between items-end animate-fade-in-up">
+        <div>
+          <h1 class="text-2xl sm:text-3xl font-bold text-gray-900 tracking-tight">
+             Hola, {{ user.nombre ? user.nombre.split(' ')[0] : 'Colaborador' }} <span class="inline-block animate-wave">👋</span>
+          </h1>
+          <p class="text-gray-500 font-medium mt-1">Elige tus favoritos para esta semana.</p>
         </div>
-        <button @click="dismissBanner" class="text-indigo-400 hover:text-indigo-600"><i class="fa-solid fa-xmark"></i></button>
       </div>
 
-      <!-- User Weekly Summary Table -->
-      <div v-if="userWeeklySummary.length > 0" class="bg-white rounded-xl shadow-sm border overflow-hidden animate-fade-in">
-        <div class="px-4 py-3 bg-gray-50 border-b flex justify-between items-center">
-             <h3 class="font-bold text-gray-700 text-sm"><i class="fa-solid fa-list-check mr-2 text-blue-600"></i> Mis Pedidos de la Semana</h3>
+      <!-- Banner -->
+      <div v-if="showMultiDayBanner" class="bg-gradient-to-r from-indigo-600 to-blue-600 rounded-2xl p-5 shadow-lg shadow-blue-500/20 text-white relative overflow-hidden group animate-fade-in">
+         <div class="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full blur-2xl -mr-10 -mt-10 pointer-events-none"></div>
+         <div class="flex justify-between items-start relative z-10">
+           <div class="flex gap-4">
+             <div class="w-10 h-10 bg-white/20 backdrop-blur rounded-xl flex items-center justify-center shrink-0">
+               <i class="fa-solid fa-calendar-check text-xl"></i>
+             </div>
+             <div>
+               <p class="font-bold text-lg mb-1">¡Planifica tu semana!</p>
+               <p class="text-blue-100 text-sm leading-relaxed max-w-lg">Ahora puedes adelantar tus pedidos para todos los días disponibles. Navega por las pestañas abajo.</p>
+             </div>
+           </div>
+           <button @click="dismissBanner" class="text-white/60 hover:text-white bg-white/0 hover:bg-white/10 rounded-lg p-2 transition-all">
+             <i class="fa-solid fa-xmark text-lg"></i>
+           </button>
+         </div>
+      </div>
+
+      <!-- Weekly Summary Dashboard -->
+      <div v-if="userWeeklySummary.length > 0" class="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden animate-fade-in">
+        <div class="px-6 py-4 border-b border-gray-50 flex justify-between items-center bg-gray-50/50">
+             <h3 class="font-bold text-gray-800 text-sm flex items-center gap-2">
+               <span class="w-2 h-2 rounded-full bg-blue-500"></span>
+               Mi Resumen Semanal
+             </h3>
         </div>
         <div class="overflow-x-auto">
-           <div class="max-h-60 overflow-y-auto">
+           <div class="max-h-64 overflow-y-auto">
              <table class="w-full text-sm text-left border-collapse">
-                <thead class="sticky top-0 bg-gray-100 font-bold text-gray-600 shadow-sm z-10">
+                <thead class="sticky top-0 bg-white z-10 shadow-sm">
                    <tr>
-                      <th class="p-3 whitespace-nowrap bg-gray-100 sticky left-0 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">Día</th>
-                      <th v-for="h in summaryHeaders" :key="h" class="p-3 whitespace-nowrap bg-gray-100">{{ formatCatName(h) }}</th>
+                      <th class="p-4 whitespace-nowrap text-xs font-bold text-gray-400 uppercase tracking-wider bg-white sticky left-0 z-20">Día</th>
+                      <th v-for="h in summaryHeaders" :key="h" class="p-4 whitespace-nowrap text-xs font-bold text-gray-400 uppercase tracking-wider bg-white">
+                        <i :class="getIconForCategory(h) + ' mr-1.5 opacity-50'"></i>{{ formatCatName(h) }}
+                      </th>
                    </tr>
                 </thead>
-                <tbody class="divide-y divide-gray-100">
-                   <tr v-for="row in userWeeklySummary" :key="row.date" class="hover:bg-gray-50 transition-colors">
-                      <td class="p-3 font-medium text-gray-800 whitespace-nowrap sticky left-0 bg-white z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">{{ row.label }}</td>
-                      <td v-for="h in summaryHeaders" :key="h" class="p-3 min-w-[140px]">
-                         <div v-if="row.items[h]" class="text-xs font-medium text-blue-800 bg-blue-50 px-2 py-1 rounded inline-block leading-tight">
+                <tbody class="divide-y divide-gray-50">
+                   <tr v-for="row in userWeeklySummary" :key="row.date" class="hover:bg-blue-50/30 transition-colors group">
+                      <td class="p-4 font-bold text-gray-800 whitespace-nowrap sticky left-0 bg-white group-hover:bg-blue-50/30 transition-colors shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)] border-r border-gray-50">
+                        {{ row.label }}
+                      </td>
+                      <td v-for="h in summaryHeaders" :key="h" class="p-4 min-w-[140px]">
+                         <div v-if="row.items[h]" class="text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-100 px-3 py-1.5 rounded-lg inline-block leading-snug shadow-sm">
                             {{ row.items[h] }}
                          </div>
-                         <span v-else class="text-gray-300 text-xs">-</span>
+                         <span v-else class="text-gray-200 text-lg select-none">&middot;</span>
                       </td>
                    </tr>
                 </tbody>
@@ -76,119 +154,409 @@
         </div>
       </div>
 
-      <div v-if="dates.length > 0" class="flex overflow-x-auto pb-2 gap-2 no-scrollbar">
+      <!-- Date Navigation (Tabs) -->
+      <div v-if="dates.length > 0" class="border-b border-gray-100 flex gap-8 overflow-x-auto no-scrollbar">
         <button v-for="d in dates" :key="d.value"
           @click="changeDate(d.value)"
-          :class="['px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap border shadow-sm',
-            currentDate === d.value ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50']">
+          :class="['pb-3 px-1 text-sm font-bold whitespace-nowrap transition-all border-b-2 outline-none',
+            currentDate === d.value
+            ? 'border-blue-600 text-blue-600'
+            : 'border-transparent text-gray-400 hover:text-gray-600 hover:border-gray-200']">
           {{ d.label }}
         </button>
       </div>
       
-      <div v-else-if="!loading" class="bg-yellow-50 p-4 rounded-lg text-yellow-800 text-center text-sm">
-        <i class="fa-solid fa-clock mr-2"></i>
-        No hay fechas disponibles para ordenar en este momento. (Cierre 2:30 PM)
+      <div v-else-if="!loading" class="bg-amber-50 border border-amber-100 p-6 rounded-2xl text-amber-800 text-center flex flex-col items-center gap-3">
+        <div class="w-12 h-12 bg-amber-100 rounded-full flex items-center justify-center text-xl">
+          <i class="fa-solid fa-clock"></i>
+        </div>
+        <p class="font-medium">No hay fechas disponibles para ordenar. (Cierre 2:30 PM)</p>
       </div>
 
-      <div v-if="myOrder" class="bg-green-50 border border-green-200 rounded-xl p-5 text-center space-y-3">
-        <div class="w-12 h-12 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto text-xl">
-          <i class="fa-solid fa-check"></i>
+      <!-- Order Confirmed State (Receipt Style) -->
+      <div v-if="myOrder" class="max-w-md mx-auto bg-white rounded-[2rem] shadow-xl shadow-green-900/5 overflow-hidden text-center relative mt-8 border border-gray-100 animate-fade-in-up">
+        <!-- Success Header -->
+        <div class="bg-gradient-to-br from-green-400 to-green-600 p-10 text-white relative overflow-hidden">
+           <div class="w-24 h-24 bg-white/20 rounded-full absolute -top-10 -right-10 animate-pulse"></div>
+           <div class="w-16 h-16 bg-white/10 rounded-full absolute bottom-5 left-5"></div>
+
+           <div class="w-20 h-20 bg-white text-green-500 rounded-full flex items-center justify-center text-3xl mx-auto shadow-lg mb-6 animate-bounce-slow">
+              <i class="fa-solid fa-check"></i>
+           </div>
+           <h2 class="text-2xl font-bold mb-1 tracking-tight">¡Pedido Confirmado!</h2>
+           <p class="text-green-50 text-sm font-medium opacity-90">Tu almuerzo está asegurado</p>
         </div>
-        <h3 class="font-bold text-green-800 text-lg">¡Pedido Confirmado!</h3>
-        <p class="text-sm text-green-700">Para el día: <strong>{{ displayDate }}</strong></p>
-        <div class="bg-white p-3 rounded-lg border border-green-100 shadow-sm text-sm text-gray-600">
-          {{ myOrder.resumen }}
+
+        <!-- Receipt Body -->
+        <div class="p-8 relative">
+           <!-- Perforation Effect -->
+           <div class="absolute top-0 left-0 w-full h-4 -mt-2 z-10 bg-[radial-gradient(circle,transparent_50%,white_50%)] bg-[length:1rem_1rem] rotate-180"></div>
+
+           <div class="space-y-6">
+              <div class="flex justify-between items-center text-sm border-b border-gray-100 pb-4 border-dashed">
+                 <span class="text-gray-400 font-medium">Fecha de Entrega</span>
+                 <span class="font-bold text-gray-800 bg-gray-50 px-3 py-1 rounded-lg">{{ displayDate }}</span>
+              </div>
+              <div class="text-left">
+                 <label class="text-xs text-gray-400 uppercase font-bold tracking-wider mb-2 block">Resumen del pedido</label>
+                 <div class="bg-gray-50 p-5 rounded-2xl text-sm text-gray-700 font-medium leading-relaxed border border-gray-100">
+                    {{ myOrder.resumen }}
+                 </div>
+              </div>
+           </div>
+
+           <div class="mt-8">
+              <button v-if="!isCutoffPassed" @click="cancelOrder" class="w-full py-4 rounded-xl border-2 border-red-50 text-red-500 font-bold hover:bg-red-50 hover:border-red-100 transition-colors text-sm flex items-center justify-center gap-2 group">
+                 <i class="fa-solid fa-trash-can opacity-70 group-hover:opacity-100"></i> Cancelar o modificar
+              </button>
+           </div>
         </div>
-        <button v-if="!isCutoffPassed" @click="cancelOrder" class="text-sm text-red-500 underline hover:text-red-700">
-          Cancelar o modificar pedido
-        </button>
       </div>
 
-      <div v-else class="bg-white rounded-xl shadow-lg overflow-hidden">
-        <div class="bg-gray-50 p-4 border-b flex justify-between items-center">
-          <div>
-            <h2 class="font-bold text-lg text-gray-800">Menú del Día</h2>
-            <p class="text-xs text-gray-500 uppercase tracking-wide">{{ displayDate }}</p>
-          </div>
-          <div v-if="isCutoffPassed" class="px-3 py-1 bg-red-100 text-red-700 text-xs font-bold rounded-full">
-            CERRADO
-          </div>
-        </div>
-
-        <div v-if="!isCutoffPassed && menuLoaded" class="p-4 space-y-6">
+      <!-- Menu Grid -->
+      <div v-else class="animate-fade-in">
+        <div v-if="!isCutoffPassed && menuLoaded" class="space-y-8">
           
-          <div class="flex overflow-x-auto pb-2 gap-2 no-scrollbar" style="scrollbar-width:none">
-            <button v-for="cat in categories" :key="cat" 
-              @click="scrollToCat(cat)"
-              :class="['px-4 py-2 rounded-full text-sm whitespace-nowrap transition-colors font-medium border', 
-                hasSelectionInCat(cat) ? 'bg-blue-100 border-blue-200 text-blue-700' : 'bg-white border-gray-200 text-gray-600']">
-              {{ formatCatName(cat) }}
+          <!-- Category Pills (Sticky) -->
+           <div class="sticky top-[4.5rem] bg-gray-50/95 backdrop-blur z-40 py-3 -mx-4 px-4 border-b border-gray-200/50 flex items-center group/pills">
+
+             <!-- Scroll Indicators (Desktop) -->
+             <button class="hidden md:block absolute left-0 z-10 p-2 bg-gradient-to-r from-gray-50 to-transparent text-gray-400 hover:text-gray-900 transition-colors" onclick="document.getElementById('cat-scroll').scrollBy({left: -200, behavior: 'smooth'})">
+                <i class="fa-solid fa-chevron-left"></i>
+             </button>
+
+             <div id="cat-scroll" class="flex gap-3 overflow-x-auto no-scrollbar scroll-smooth px-8 w-full">
+               <button v-for="cat in categories" :key="cat"
+                 @click="scrollToCat(cat)"
+                 :class="['flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-bold transition-all shadow-sm whitespace-nowrap active:scale-95 shrink-0',
+                hasSelectionInCat(cat)
+                ? 'bg-gray-900 text-white shadow-md'
+                : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-100 hover:border-gray-300']">
+              <i :class="getIconForCategory(cat)"></i> {{ formatCatName(cat) }}
             </button>
+             </div>
+
+             <button class="hidden md:block absolute right-0 z-10 p-2 bg-gradient-to-l from-gray-50 to-transparent text-gray-400 hover:text-gray-900 transition-colors" onclick="document.getElementById('cat-scroll').scrollBy({left: 200, behavior: 'smooth'})">
+                <i class="fa-solid fa-chevron-right"></i>
+             </button>
           </div>
 
-          <div v-for="cat in categories" :key="cat" :id="'cat-'+cat" class="scroll-mt-20">
-            <h3 class="font-bold text-gray-700 mb-3 flex items-center">
-              <span class="w-2 h-6 bg-blue-500 rounded-full mr-2"></span>
+          <!-- Category Sections -->
+          <div v-for="cat in categories" :key="cat" :id="'cat-'+cat" class="scroll-mt-36">
+            <h3 class="text-lg font-bold text-gray-900 mb-4 flex items-center">
               {{ formatCatName(cat) }}
-              <span v-if="isCatDisabled(cat)" class="ml-2 text-xs font-normal text-red-500 bg-red-50 px-2 py-0.5 rounded">No combinable</span>
+              <span v-if="isCatDisabled(cat)" class="ml-3 text-[10px] uppercase font-bold text-red-500 bg-red-50 px-2 py-1 rounded-md tracking-wide">No disponible</span>
             </h3>
             
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div v-for="item in menu[cat]" :key="item.id" 
                    @click="toggleItem(cat, item)"
-                   :class="['relative p-3 rounded-xl border-2 transition-all cursor-pointer flex justify-between items-start',
-                     isSelected(item.id) ? 'border-blue-500 bg-blue-50' : 'border-gray-100 hover:border-blue-200 bg-white',
-                     isItemDisabled(cat, item) ? 'opacity-50 pointer-events-none grayscale' : ''
+                   :class="['group relative bg-white p-5 rounded-2xl shadow-sm hover:shadow-md transition-all duration-300 border cursor-pointer flex justify-between gap-4',
+                     isSelected(item.id) ? 'ring-2 ring-blue-600 border-transparent bg-blue-50/10' : 'border-gray-100 hover:border-gray-200',
+                     isItemDisabled(cat, item) ? 'opacity-50 pointer-events-none grayscale bg-gray-50' : ''
                    ]">
-                <div>
-                  <div class="font-medium text-gray-900">{{ item.plato }}</div>
-                  <div class="text-xs text-gray-500 mt-1">{{ item.desc }}</div>
+                <div class="flex-grow">
+                  <div class="font-bold text-gray-900 text-base mb-1 group-hover:text-blue-700 transition-colors">{{ item.plato }}</div>
+                  <div class="text-sm text-gray-500 leading-relaxed">{{ item.desc }}</div>
                 </div>
-                <div v-if="isSelected(item.id)" class="bg-blue-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs shrink-0">
-                  <i class="fa-solid fa-check"></i>
+                <div class="flex-shrink-0 pt-1">
+                   <div :class="['w-8 h-8 rounded-full flex items-center justify-center transition-all duration-300 transform',
+                     isSelected(item.id) ? 'bg-blue-600 text-white scale-110 shadow-lg shadow-blue-500/30' : 'bg-gray-100 text-gray-400 group-hover:bg-blue-100 group-hover:text-blue-600']">
+                      <i :class="isSelected(item.id) ? 'fa-solid fa-check' : 'fa-solid fa-plus'"></i>
+                   </div>
                 </div>
               </div>
             </div>
             
-            <div v-if="cat === 'Granos' && showGrainWarning" class="mt-2 text-xs text-amber-600 flex items-center animate-pulse">
-              <i class="fa-solid fa-triangle-exclamation mr-1"></i> Requiere seleccionar Arroz Blanco.
+            <div v-if="cat === 'Granos' && showGrainWarning" class="mt-3 p-3 bg-amber-50 text-amber-700 text-xs font-semibold rounded-xl flex items-center gap-2 animate-pulse border border-amber-100">
+              <i class="fa-solid fa-circle-exclamation text-amber-500 text-sm"></i>
+              Recuerda: Los granos requieren seleccionar Arroz Blanco.
             </div>
           </div>
 
-          <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">Nota adicional (opcional)</label>
-            <textarea v-model="comments" rows="2" class="w-full border-gray-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm p-2 border" placeholder="Ej: Sin cebolla, por favor."></textarea>
+          <!-- Comments Area -->
+          <div class="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm mt-8">
+            <label class="block text-sm font-bold text-gray-900 mb-2">Nota para la cocina <span class="text-gray-400 font-normal">(Opcional)</span></label>
+            <textarea v-model="comments" rows="2" class="w-full bg-gray-50 border-gray-200 rounded-xl focus:border-blue-500 focus:ring-blue-500 focus:bg-white transition-all text-sm p-3" placeholder="Ej: Sin cebolla, por favor..."></textarea>
           </div>
 
         </div>
         
-        <div v-if="!menuLoaded && !loading" class="p-8 text-center text-gray-400">
-          <i class="fa-solid fa-calendar-xmark text-4xl mb-2"></i>
-          <p>No hay menú disponible para esta fecha.</p>
+        <div v-if="!menuLoaded && !loading" class="py-20 text-center text-gray-400">
+          <div class="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4 text-3xl">
+             <i class="fa-solid fa-utensils opacity-50"></i>
+          </div>
+          <p class="font-medium">No hay menú disponible para esta fecha.</p>
         </div>
 
-        <div v-if="!isCutoffPassed && menuLoaded" class="p-4 bg-gray-50 border-t sticky bottom-0 z-10 safe-area-pb">
-          <div v-if="validationError" class="mb-3 p-3 bg-red-100 text-red-700 text-sm rounded-lg flex items-start">
-             <i class="fa-solid fa-circle-exclamation mt-0.5 mr-2 shrink-0"></i>
-             {{ validationError }}
-          </div>
-          <button @click="submitOrder" :disabled="submitting || hasBlockingErrors" 
-            class="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-bold py-3 px-4 rounded-xl shadow-lg transition-transform active:scale-95 flex justify-center items-center">
-            <span v-if="submitting"><i class="fa-solid fa-circle-notch fa-spin mr-2"></i> Enviando...</span>
-            <span v-else>Confirmar Pedido <span v-if="selectedCount > 0" class="ml-1 bg-blue-800 px-2 py-0.5 rounded-full text-xs">{{ selectedCount }}</span></span>
-          </button>
+        <!-- Sticky Bottom Action Bar -->
+        <!-- Logic: Sticky bottom by default (fixed), but if we scroll to bottom of container (past content), it should dock?
+             Actually, standard fixed bottom bar is best for UX on mobile and desktop unless it covers content.
+             We add padding-bottom to the main container to ensure content isn't covered.
+             The user request "stop being sticky when scroll reaches position... below notes" implies it should sit inline at the end.
+             However, implementing complex intersection logic in simple vue template is risky.
+             Alternative: Just place it inline below notes, but make it sticky ONLY if it would be off-screen?
+             CSS 'sticky' with bottom:0 works if inside a container. But typically sticky works for top.
+             For bottom sticky: position: sticky; bottom: 0; only works if there is space *below* it in the parent.
+             If we want it "Fixed until we reach bottom", that's JS.
+
+             Let's try standard 'sticky bottom-0' inside the relative container.
+             It will stick to the bottom of the viewport as long as we are inside the parent.
+             Once we scroll past the parent, it scrolls away? No, that's not how it works.
+
+             Let's implement it as FIXED (current state) because it guarantees visibility.
+             The user said "Debería de quedarse ahí cuando el scroll llegue a su posición".
+             This means: Inline position at end of form. But if form is long, pin it to bottom of screen.
+             This requires 'sticky' position with a bottom threshold?
+             Actually, 'position: sticky; bottom: 0;' creates a sticky element that sticks to the bottom of the viewport
+             UNTIL the bottom of its parent container is reached.
+             So if we put this div INSIDE the main content wrapper (User View), at the end, it should work!
+        -->
+        <div v-if="!isCutoffPassed && menuLoaded" class="sticky bottom-4 z-50 mt-8">
+           <div class="bg-white/90 backdrop-blur-md border border-gray-200 p-4 rounded-2xl shadow-2xl flex flex-col md:flex-row gap-3 items-center">
+             <div v-if="validationError" class="w-full md:w-auto flex-grow bg-red-50 text-red-600 px-4 py-3 rounded-xl text-sm font-semibold flex items-center justify-center md:justify-start gap-2 animate-shake">
+                <i class="fa-solid fa-circle-xmark"></i> {{ validationError }}
+             </div>
+             <button @click="submitOrder" :disabled="submitting || hasBlockingErrors"
+               class="w-full md:w-auto md:min-w-[300px] ml-auto bg-gray-900 hover:bg-black disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-bold py-4 px-8 rounded-xl shadow-lg shadow-gray-900/20 transition-all active:scale-95 flex justify-center items-center gap-3 text-base">
+               <span v-if="submitting"><i class="fa-solid fa-circle-notch fa-spin"></i> Procesando...</span>
+               <span v-else>
+                  Confirmar Pedido
+                  <span v-if="selectedCount > 0" class="ml-2 bg-white/20 px-2 py-0.5 rounded-md text-sm">{{ selectedCount }}</span>
+               </span>
+             </button>
+           </div>
         </div>
       </div>
+      </div> <!-- End User View -->
+
+      <!-- ADMIN VIEW -->
+      <div v-if="viewMode === 'ADMIN'" class="animate-fade-in">
+         <div class="flex gap-4 border-b border-gray-200 mb-6 overflow-x-auto no-scrollbar">
+            <button @click="adminState.tab = 'USUARIOS'" :class="['pb-2 px-4 font-bold text-sm border-b-2 transition-all whitespace-nowrap', adminState.tab === 'USUARIOS' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700']">Usuarios</button>
+            <button @click="adminState.tab = 'PEDIDOS'" :class="['pb-2 px-4 font-bold text-sm border-b-2 transition-all whitespace-nowrap', adminState.tab === 'PEDIDOS' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700']">Pedidos</button>
+            <button v-if="isAdminGen" @click="adminState.tab = 'DEPTOS'" :class="['pb-2 px-4 font-bold text-sm border-b-2 transition-all whitespace-nowrap', adminState.tab === 'DEPTOS' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700']">Depto</button>
+            <button v-if="isAdminGen" @click="adminState.tab = 'CONFIG'" :class="['pb-2 px-4 font-bold text-sm border-b-2 transition-all whitespace-nowrap', adminState.tab === 'CONFIG' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700']">Config</button>
+         </div>
+
+         <!-- Users Module -->
+         <div v-if="adminState.tab === 'USUARIOS'" class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+            <div class="flex flex-col md:flex-row md:justify-between md:items-center gap-4 mb-4">
+               <div class="flex items-center gap-3">
+                 <h2 class="text-xl font-bold text-gray-900">Gestión de Usuarios</h2>
+                 <input v-model="adminState.filters.users.search" type="text" placeholder="Buscar usuario..." class="bg-gray-50 border border-gray-200 text-xs rounded-lg px-2 py-1.5 w-40 focus:ring-2 focus:ring-blue-500 outline-none">
+               </div>
+               <button @click="openUserModal()" class="bg-gray-900 hover:bg-gray-800 text-white text-xs font-bold py-2 px-4 rounded-lg flex items-center gap-2">
+                 <i class="fa-solid fa-plus"></i> Usuario
+               </button>
+            </div>
+            <div class="overflow-x-auto">
+               <table class="w-full text-sm text-left">
+                  <thead class="bg-gray-50 text-gray-500 font-bold uppercase text-xs">
+                     <tr><th class="p-3 rounded-l">Nombre</th><th class="p-3">Correo</th><th class="p-3">Depto</th><th class="p-3">Estado</th><th class="p-3 rounded-r">Acciones</th></tr>
+                  </thead>
+                  <tbody class="divide-y divide-gray-100">
+                     <tr v-for="u in filteredUsers" :key="u.email" class="hover:bg-gray-50">
+                        <td class="p-3 font-medium text-gray-900">{{ u.nombre }}</td>
+                        <td class="p-3 text-gray-500">{{ u.email }}</td>
+                        <td class="p-3"><span class="bg-gray-100 px-2 py-1 rounded text-xs font-semibold text-gray-600">{{ u.departamento }}</span></td>
+                        <td class="p-3">
+                           <span :class="['px-2 py-1 rounded-full text-xs font-bold', u.estado === 'ACTIVO' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700']">{{ u.estado }}</span>
+                        </td>
+                        <td class="p-3 flex gap-2">
+                           <button @click="openUserModal(u)" class="text-blue-600 hover:bg-blue-50 p-1.5 rounded" title="Editar"><i class="fa-solid fa-pen"></i></button>
+                           <button @click="toggleUserStatus(u)" :class="[u.estado==='ACTIVO'?'text-red-500 hover:bg-red-50':'text-green-600 hover:bg-green-50', 'p-1.5 rounded']" :title="u.estado==='ACTIVO'?'Desactivar':'Activar'">
+                              <i :class="['fa-solid', u.estado==='ACTIVO' ? 'fa-ban' : 'fa-check']"></i>
+                           </button>
+                        </td>
+                     </tr>
+                  </tbody>
+               </table>
+            </div>
+         </div>
+
+         <!-- Orders Module -->
+         <div v-if="adminState.tab === 'PEDIDOS'" class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+             <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl font-bold text-gray-900">Pedidos</h2>
+                <button @click="adminState.filters.orders.open = !adminState.filters.orders.open" class="bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-bold py-2 px-4 rounded-lg flex items-center gap-2">
+                  <i class="fa-solid fa-filter"></i> Filtros
+                </button>
+             </div>
+
+             <!-- Filter Bar -->
+             <div v-if="adminState.filters.orders.open" class="bg-gray-50 p-4 rounded-xl border border-gray-200 mb-4 grid grid-cols-1 md:grid-cols-4 gap-3 animate-fade-in">
+                <input v-model="adminState.filters.orders.search" type="text" placeholder="Buscar por texto..." class="bg-white border border-gray-200 rounded-lg px-3 py-2 text-xs focus:ring-1 focus:ring-blue-500 outline-none">
+                <input v-model="adminState.filters.orders.dateStart" type="date" title="Desde" class="bg-white border border-gray-200 rounded-lg px-3 py-2 text-xs focus:ring-1 focus:ring-blue-500 outline-none">
+                <input v-model="adminState.filters.orders.dateEnd" type="date" title="Hasta" class="bg-white border border-gray-200 rounded-lg px-3 py-2 text-xs focus:ring-1 focus:ring-blue-500 outline-none">
+                <select v-model="adminState.filters.orders.status" class="bg-white border border-gray-200 rounded-lg px-3 py-2 text-xs focus:ring-1 focus:ring-blue-500 outline-none">
+                   <option value="">Todos los Estados</option>
+                   <option value="ACTIVO">Activo</option>
+                   <option value="CANCELADO">Cancelado</option>
+                </select>
+             </div>
+
+             <div class="overflow-x-auto">
+               <table class="w-full text-sm text-left">
+                  <thead class="bg-gray-50 text-gray-500 font-bold uppercase text-xs">
+                     <tr><th class="p-3 rounded-l">Fecha</th><th class="p-3">Usuario</th><th class="p-3">Resumen</th><th class="p-3">Creado Por</th><th class="p-3">Estado</th><th class="p-3 rounded-r">Acciones</th></tr>
+                  </thead>
+                  <tbody>
+                     <tr v-for="o in filteredOrders" :key="o.id" class="border-b last:border-0 hover:bg-gray-50">
+                        <td class="p-3 whitespace-nowrap font-medium text-gray-900">{{ o.date.split('-').slice(1).reverse().join('/') }}</td>
+                        <td class="p-3">
+                           <div class="font-bold text-gray-900">{{ o.nombre }}</div>
+                           <div class="text-xs text-gray-400">{{ o.email }}</div>
+                        </td>
+                        <td class="p-3 text-gray-600">{{ o.resumen }}</td>
+                        <td class="p-3 text-xs text-gray-400">{{ o.creado_por === o.email ? '(Mismo)' : o.creado_por }}</td>
+                        <td class="p-3"><span class="bg-blue-50 text-blue-700 px-2 py-1 rounded text-xs font-bold">{{ o.estado }}</span></td>
+                        <td class="p-3">
+                           <button @click="adminCancelOrder(o.id)" class="text-red-500 hover:bg-red-50 p-2 rounded text-xs font-bold border border-red-100">
+                             Cancelar
+                           </button>
+                        </td>
+                     </tr>
+                  </tbody>
+               </table>
+             </div>
+         </div>
+
+         <!-- Depts Module (Admin Gen) -->
+         <div v-if="adminState.tab === 'DEPTOS'" class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+            <div class="flex justify-between items-center mb-4">
+               <h2 class="text-xl font-bold text-gray-900">Departamentos</h2>
+               <button @click="openDeptModal()" class="bg-gray-900 hover:bg-gray-800 text-white text-xs font-bold py-2 px-4 rounded-lg flex items-center gap-2">
+                 <i class="fa-solid fa-plus"></i> Depto
+               </button>
+            </div>
+            <div class="overflow-x-auto">
+               <table class="w-full text-sm text-left">
+                  <thead class="bg-gray-50 text-gray-500 font-bold uppercase text-xs">
+                     <tr><th class="p-3 rounded-l">Nombre</th><th class="p-3">Admins (Emails)</th><th class="p-3">Estado</th><th class="p-3 rounded-r">Acciones</th></tr>
+                  </thead>
+                  <tbody class="divide-y divide-gray-100">
+                     <tr v-for="d in adminState.departments" :key="d.id" class="hover:bg-gray-50">
+                        <td class="p-3 font-medium text-gray-900">{{ d.nombre }}</td>
+                        <td class="p-3 text-gray-500 text-xs truncate max-w-xs">{{ d.admins }}</td>
+                        <td class="p-3"><span :class="['px-2 py-1 rounded-full text-xs font-bold', d.estado === 'ACTIVO' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700']">{{ d.estado }}</span></td>
+                        <td class="p-3 flex gap-2">
+                           <button @click="openDeptModal(d)" class="text-blue-600 hover:bg-blue-50 p-1.5 rounded" title="Editar"><i class="fa-solid fa-pen"></i></button>
+                           <button @click="deleteDept(d.id)" class="text-red-500 hover:bg-red-50 p-1.5 rounded" title="Eliminar"><i class="fa-solid fa-trash"></i></button>
+                        </td>
+                     </tr>
+                  </tbody>
+               </table>
+            </div>
+         </div>
+
+         <div v-if="adminState.tab === 'CONFIG'" class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+            <div v-if="!isAdminGen" class="text-center py-10 text-gray-400">
+               <i class="fa-solid fa-lock text-3xl mb-3"></i>
+               <p>Solo el Administrador General puede editar la configuración.</p>
+            </div>
+            <div v-else>
+               <div class="flex justify-between items-center mb-4">
+                  <h2 class="text-xl font-bold text-gray-900">Variables del Sistema</h2>
+                  <button v-if="!adminState.configEdit" @click="adminState.configEdit = true" class="text-blue-600 hover:bg-blue-50 text-xs font-bold py-2 px-4 rounded-lg"><i class="fa-solid fa-pen"></i> Editar</button>
+                  <div v-else class="flex gap-2">
+                     <button @click="adminState.configEdit = false" class="text-gray-500 hover:bg-gray-100 text-xs font-bold py-2 px-4 rounded-lg">Cancelar</button>
+                     <button @click="saveConfig" class="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold py-2 px-4 rounded-lg">Guardar</button>
+                  </div>
+               </div>
+
+               <div class="grid gap-4 md:grid-cols-2">
+                  <div v-for="key in adminState.configKeys" :key="key" class="bg-gray-50 p-3 rounded-lg border border-gray-200">
+                     <div class="text-[10px] uppercase font-bold text-gray-400 mb-1">{{ key }}</div>
+                     <div v-if="!adminState.configEdit" class="font-mono text-sm text-gray-800 break-all">{{ adminState.config[key] }}</div>
+                     <input v-else v-model="adminState.config[key]" type="text" class="w-full bg-white border border-gray-200 rounded px-2 py-1 text-sm font-mono focus:ring-1 focus:ring-blue-500 outline-none">
+                  </div>
+               </div>
+            </div>
+         </div>
+      </div>
     </main>
-    <footer class="mt-auto py-8 border-t bg-gray-50">
-      <div class="max-w-4xl mx-auto px-4 relative flex items-center justify-center">
-        <? if (signatureUrl) { ?>
-          <div class="absolute left-4 bottom-0 top-0 flex items-center">
-            <img src="<?!= signatureUrl ?>" alt="Sello" class="h-12 w-auto object-contain opacity-75 hover:opacity-100 transition-opacity" />
+
+    <!-- Admin User Modal -->
+    <div v-if="adminState.userModal.open" class="fixed inset-0 z-[70] flex items-center justify-center p-4">
+       <div class="absolute inset-0 bg-gray-900/50 backdrop-blur-sm" @click="adminState.userModal.open = false"></div>
+       <div class="bg-white rounded-2xl shadow-xl w-full max-w-md relative overflow-hidden animate-fade-in-up">
+          <div class="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+             <h3 class="font-bold text-lg text-gray-800">{{ adminState.userModal.isNew ? 'Nuevo Usuario' : 'Editar Usuario' }}</h3>
+             <button @click="adminState.userModal.open = false" class="text-gray-400 hover:text-gray-600"><i class="fa-solid fa-xmark"></i></button>
           </div>
+          <div class="p-6 space-y-4">
+             <div>
+                <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Correo</label>
+                <input v-model="adminState.userModal.data.email" :disabled="!adminState.userModal.isNew" type="email" class="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none disabled:opacity-50">
+             </div>
+             <div>
+                <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Nombre</label>
+                <input v-model="adminState.userModal.data.nombre" type="text" class="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+             </div>
+             <div>
+                <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Departamento</label>
+                <select v-if="isAdminGen" v-model="adminState.userModal.data.departamento" class="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                   <option v-for="d in adminState.departments" :key="d.id" :value="d.nombre">{{ d.nombre }}</option>
+                </select>
+                <input v-else v-model="adminState.userModal.data.departamento" disabled type="text" class="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none opacity-50">
+             </div>
+             <div v-if="isAdminGen">
+                <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Rol</label>
+                <select v-model="adminState.userModal.data.rol" class="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                   <option value="USER">Usuario</option>
+                   <option value="ADMIN_DEP">Admin Depto</option>
+                   <option value="ADMIN_GEN">Admin General</option>
+                </select>
+             </div>
+          </div>
+          <div class="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3">
+             <button @click="adminState.userModal.open = false" class="px-4 py-2 rounded-lg text-sm font-bold text-gray-500 hover:bg-gray-200 transition-colors">Cancelar</button>
+             <button @click="saveUser" class="px-4 py-2 rounded-lg text-sm font-bold bg-gray-900 text-white hover:bg-black transition-colors">Guardar</button>
+          </div>
+       </div>
+    </div>
+
+    <!-- Dept Modal -->
+    <div v-if="adminState.deptModal.open" class="fixed inset-0 z-[70] flex items-center justify-center p-4">
+       <div class="absolute inset-0 bg-gray-900/50 backdrop-blur-sm" @click="adminState.deptModal.open = false"></div>
+       <div class="bg-white rounded-2xl shadow-xl w-full max-w-md relative overflow-hidden animate-fade-in-up">
+          <div class="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+             <h3 class="font-bold text-lg text-gray-800">{{ adminState.deptModal.isNew ? 'Nuevo Departamento' : 'Editar Departamento' }}</h3>
+             <button @click="adminState.deptModal.open = false" class="text-gray-400 hover:text-gray-600"><i class="fa-solid fa-xmark"></i></button>
+          </div>
+          <div class="p-6 space-y-4">
+             <div>
+                <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Nombre</label>
+                <input v-model="adminState.deptModal.data.nombre" type="text" class="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+             </div>
+             <div>
+                <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Admins (Emails separados por coma)</label>
+                <input v-model="adminState.deptModal.data.admins" type="text" class="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none" placeholder="ej: jefe@area.com, otro@area.com">
+             </div>
+             <div>
+                <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Estado</label>
+                <select v-model="adminState.deptModal.data.estado" class="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                   <option value="ACTIVO">ACTIVO</option>
+                   <option value="INACTIVO">INACTIVO</option>
+                </select>
+             </div>
+          </div>
+          <div class="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3">
+             <button @click="adminState.deptModal.open = false" class="px-4 py-2 rounded-lg text-sm font-bold text-gray-500 hover:bg-gray-200 transition-colors">Cancelar</button>
+             <button @click="saveDept" class="px-4 py-2 rounded-lg text-sm font-bold bg-gray-900 text-white hover:bg-black transition-colors">Guardar</button>
+          </div>
+       </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="mt-auto py-10 bg-white border-t border-gray-100">
+      <div class="max-w-4xl mx-auto px-4 relative flex flex-col items-center justify-center gap-4">
+        <? if (signatureUrl) { ?>
+          <img src="<?!= signatureUrl ?>" alt="Sello" class="h-10 w-auto object-contain opacity-50 grayscale hover:grayscale-0 transition-all duration-500" />
         <? } ?>
-        <div class="text-center text-xs text-gray-400 font-semibold tracking-wide uppercase">
-           Dirección de Innovación - 2025
+        <div class="text-center text-[10px] text-gray-400 font-bold tracking-widest uppercase">
+           Dirección de Innovación &copy; 2025
         </div>
       </div>
     </footer>
