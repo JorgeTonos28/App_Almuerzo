@@ -59,11 +59,46 @@ function setupSheetsAndConfig(){
   });
 
   populateDefaultConfig_(ss.getSheetByName('Config'));
+  ensureBackupFolder_(ss.getSheetByName('Config'));
   populateSampleData_(ss); // Datos de prueba para que arranques rápido
   
   SpreadsheetApp.flush();
   Logger.log('Estructura de base de datos actualizada correctamente.');
   return 'OK';
+}
+
+function ensureBackupFolder_(configSheet) {
+  if (!configSheet) return;
+  const data = configSheet.getDataRange().getValues();
+  let row = -1;
+  let currentId = '';
+
+  for(let i=1; i<data.length; i++) {
+     if(data[i][0] === 'BACKUP_FOLDER_ID') {
+        row = i+1;
+        currentId = data[i][1];
+        break;
+     }
+  }
+
+  if (row > 0 && !currentId) {
+     try {
+        const ssFile = DriveApp.getFileById(SpreadsheetApp.getActive().getId());
+        const parents = ssFile.getParents();
+        if (parents.hasNext()) {
+           const parent = parents.next();
+           const folders = parent.getFoldersByName('Backups_Almuerzo');
+           let folder;
+           if (folders.hasNext()) folder = folders.next();
+           else folder = parent.createFolder('Backups_Almuerzo');
+
+           configSheet.getRange(row, 2).setValue(folder.getId());
+           Logger.log('Carpeta backup creada/asignada: ' + folder.getId());
+        }
+     } catch(e) {
+        Logger.log('Error creando carpeta backup: ' + e.message);
+     }
+  }
 }
 
 function populateDefaultConfig_(sheet){

@@ -30,6 +30,8 @@ createApp({
     const selection = reactive(new Set());
     const selectionData = reactive({});
 
+    const deptAdminSearch = ref('');
+
     // ADMIN STATE
     const viewMode = ref('USER'); // USER | ADMIN
     const adminState = reactive({
@@ -40,6 +42,7 @@ createApp({
        departments: [],
        deptMap: {}, // ID -> Name
        config: {},
+       configList: [],
        configKeys: [],
        holidays: [],
        userModal: { open: false, isNew: true, data: {} },
@@ -72,6 +75,14 @@ createApp({
           u.nombre.toLowerCase().includes(q) ||
           u.email.toLowerCase().includes(q) ||
           u.departamento.toLowerCase().includes(q)
+       );
+    });
+
+    const filteredAdminUsers = computed(() => {
+       const q = deptAdminSearch.value.toLowerCase();
+       if (!q) return [];
+       return adminState.users.filter(u =>
+          u.nombre.toLowerCase().includes(q) || u.email.toLowerCase().includes(q)
        );
     });
 
@@ -356,7 +367,8 @@ createApp({
        }
     };
 
-    const loadAdminData = () => {
+    const loadAdminData = (force = false) => {
+       if (!force && adminState.users.length > 0) return;
        adminState.loading = true;
        google.script.run
          .withSuccessHandler(res => {
@@ -366,6 +378,7 @@ createApp({
                adminState.orders = res.orders;
                adminState.departments = res.departments || [];
                adminState.config = res.config || {};
+               adminState.configList = res.configList || [];
                adminState.configKeys = res.configKeys || [];
                adminState.holidays = res.holidays || [];
                // Also populate dept map from list
@@ -497,7 +510,11 @@ createApp({
        adminState.loading = true;
        google.script.run.withSuccessHandler(res => {
           adminState.loading = false;
-          if(res.ok) { adminState.holidayModal.open = false; loadAdminData(); }
+          if(res.ok) {
+             adminState.holidayModal.open = false;
+             adminState.holidays.push({ date: adminState.holidayModal.data.date, desc: adminState.holidayModal.data.desc });
+             loadData(); // Refresh user view
+          }
           else alert(res.msg);
        }).apiSaveHoliday(adminState.holidayModal.data.date, adminState.holidayModal.data.desc);
     };
@@ -521,13 +538,41 @@ createApp({
 
     const responsiblesJson = computed({
         get: () => {
-            try { return JSON.parse(adminState.config['RESPONSIBLES_EMAILS_JSON'] || '{}'); }
+            let parsed = {};
+            try { parsed = JSON.parse(adminState.config['RESPONSIBLES_EMAILS_JSON'] || '{}'); }
             catch(e) { return {}; }
+            // Ensure structure
+            if (adminState.departments) {
+                adminState.departments.forEach(d => {
+                   if (!parsed[d.id]) parsed[d.id] = { name: '', email: '' };
+                   // Legacy string support
+                   if (typeof parsed[d.id] === 'string') parsed[d.id] = { name: '', email: parsed[d.id] };
+                });
+            }
+            return parsed;
         },
         set: (val) => {
             adminState.config['RESPONSIBLES_EMAILS_JSON'] = JSON.stringify(val);
         }
     });
+
+    const addDeptAdmin = (user) => {
+       if (user.rol === 'ADMIN_GEN') return alert("No se puede asignar un Admin General como Admin de Departamento.");
+       if (user.rol === 'ADMIN_DEP') {
+          if (!confirm(`Advertencia: ${user.nombre} dejará de ser admin de su departamento actual.`)) return;
+       }
+       let current = adminState.deptModal.data.admins ? adminState.deptModal.data.admins.split(',').map(e=>e.trim()).filter(e=>e) : [];
+       if (!current.includes(user.email)) {
+          current.push(user.email);
+          adminState.deptModal.data.admins = current.join(', ');
+       }
+    };
+
+    const removeDeptAdmin = (email) => {
+       let current = adminState.deptModal.data.admins ? adminState.deptModal.data.admins.split(',').map(e=>e.trim()).filter(e=>e) : [];
+       current = current.filter(e => e !== email);
+       adminState.deptModal.data.admins = current.join(', ');
+    };
 
     const dismissBanner = () => {
       showMultiDayBanner.value = false;
@@ -649,6 +694,9 @@ createApp({
       openUserModal, saveUser, toggleUserStatus, adminCancelOrder,
       openDeptModal, saveDept, deleteDept, saveConfig, clearFilters,
       
+      // Dept Helpers
+      addDeptAdmin, removeDeptAdmin, deptAdminSearch, filteredAdminUsers,
+
       // Menu/Holiday
       loadMenuDay, openMenuModal, saveMenuItem, deleteMenuItem,
       saveHoliday, deleteHoliday, responsiblesJson,
