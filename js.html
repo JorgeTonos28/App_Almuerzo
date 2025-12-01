@@ -23,11 +23,14 @@ createApp({
     const allOrders = ref({});
     const remindersEnabled = ref(true);
     const showMultiDayBanner = ref(false);
+    const bannerConfig = ref({ text: '', limit: 5 });
     
     // Formulario
     const comments = ref('');
     const selection = reactive(new Set());
     const selectionData = reactive({});
+
+    const deptAdminSearch = ref('');
 
     // ADMIN STATE
     const viewMode = ref('USER'); // USER | ADMIN
@@ -37,7 +40,9 @@ createApp({
        users: [],
        orders: [],
        departments: [],
+       deptMap: {}, // ID -> Name
        config: {},
+       configList: [],
        configKeys: [],
        holidays: [],
        userModal: { open: false, isNew: true, data: {} },
@@ -46,7 +51,15 @@ createApp({
        filters: {
           orders: { search: '', dateStart: '', dateEnd: '', status: '', open: false },
           users: { search: '' }
-       }
+       },
+       // Menu Editor
+       menuDate: '',
+       menuItems: [],
+       menuModal: { open: false, isNew: true, data: {} },
+       // Holiday Editor
+       holidayModal: { open: false, data: {} },
+       nextBusinessDay: '',
+       responsiblesList: []
     });
 
     // === COMPUTED PROPERTIES ===
@@ -65,6 +78,30 @@ createApp({
           u.email.toLowerCase().includes(q) ||
           u.departamento.toLowerCase().includes(q)
        );
+    });
+
+    const filteredAdminUsers = computed(() => {
+       const q = deptAdminSearch.value.toLowerCase();
+       if (!q) return [];
+       return adminState.users.filter(u =>
+          u.nombre.toLowerCase().includes(q) || u.email.toLowerCase().includes(q)
+       );
+    });
+
+    const deptMoveHint = computed(() => {
+       if (!adminState.deptModal.data.admins) return [];
+       const emails = adminState.deptModal.data.admins.split(',').map(e=>e.trim().toLowerCase());
+       const moved = [];
+       const targetId = adminState.deptModal.data.id;
+
+       emails.forEach(e => {
+          const u = adminState.users.find(x => x.email.toLowerCase() === e);
+          if (u && u.rol === 'ADMIN_DEP' && (!targetId || u.departamentoId !== targetId)) {
+             const oldName = adminState.deptMap[u.departamentoId] || 'Otro';
+             moved.push(`${u.nombre} se moverá de ${oldName}`);
+          }
+       });
+       return moved;
     });
 
     const filteredOrders = computed(() => {
@@ -264,7 +301,14 @@ createApp({
             adminData.value = res.adminData;
             remindersEnabled.value = res.userPrefs?.reminders !== false;
 
-            if (!localStorage.getItem('multiDayBannerDismissed')) {
+            // Map Dept IDs if needed (e.g. for display in Admin)
+            if (res.deptMap) adminState.deptMap = res.deptMap;
+
+            if (res.nextBusinessDay) adminState.nextBusinessDay = res.nextBusinessDay;
+
+            bannerConfig.value = res.bannerConfig || { text: '', limit: 5 };
+            const bCount = res.userPrefs?.banner_count || 0;
+            if (bCount < bannerConfig.value.limit) {
               showMultiDayBanner.value = true;
             }
             
@@ -331,7 +375,7 @@ createApp({
 
     const toggleReminders = () => {
       remindersEnabled.value = !remindersEnabled.value;
-      google.script.run.apiSetUserPreference('reminders', remindersEnabled.value);
+      google.script.run.apiSetUserPreference('reminders', remindersEnabled.value, isDeptAdmin.value ? impersonateEmail.value : null);
     };
 
     const toggleAdminView = () => {
@@ -343,7 +387,8 @@ createApp({
        }
     };
 
-    const loadAdminData = () => {
+    const loadAdminData = (force = false) => {
+       if (!force && adminState.users.length > 0) return;
        adminState.loading = true;
        google.script.run
          .withSuccessHandler(res => {
@@ -353,8 +398,19 @@ createApp({
                adminState.orders = res.orders;
                adminState.departments = res.departments || [];
                adminState.config = res.config || {};
+               adminState.configList = res.configList || [];
                adminState.configKeys = res.configKeys || [];
                adminState.holidays = res.holidays || [];
+
+               try {
+                  adminState.responsiblesList = JSON.parse(adminState.config['RESPONSIBLES_EMAILS_JSON'] || '[]');
+                  if (!Array.isArray(adminState.responsiblesList)) adminState.responsiblesList = [];
+               } catch(e) { adminState.responsiblesList = []; }
+
+               // Also populate dept map from list
+               const map = {};
+               adminState.departments.forEach(d => map[d.id] = d.nombre);
+               adminState.deptMap = map;
             } else {
                alert(res.msg);
             }
@@ -377,7 +433,7 @@ createApp({
             adminState.loading = false;
             if(res.ok) {
                adminState.userModal.open = false;
-               loadAdminData();
+               loadAdminData(true);
             } else {
                alert(res.msg);
             }
@@ -388,19 +444,16 @@ createApp({
     const toggleUserStatus = (u) => {
        if(!confirm(`¿${u.estado === 'ACTIVO' ? 'Desactivar' : 'Activar'} a ${u.nombre}?`)) return;
        const newState = u.estado === 'ACTIVO' ? 'INACTIVO' : 'ACTIVO';
-       // We can reuse saveUser logic or create a dedicated endpoint.
-       // For simplicity, we use apiAdminSaveUser updating just status if the backend supports it,
-       // or we manually constructing the object.
        const payload = { ...u, estado: newState };
        adminState.loading = true;
-       google.script.run.withSuccessHandler(() => { loadAdminData(); }).apiAdminSaveUser(payload);
+       google.script.run.withSuccessHandler(() => { loadAdminData(true); }).apiAdminSaveUser(payload);
     };
 
     const adminCancelOrder = (orderId) => {
        if(!confirm("¿Cancelar pedido?")) return;
        adminState.loading = true;
        google.script.run.withSuccessHandler(res => {
-          if(res.ok) loadAdminData();
+          if(res.ok) loadAdminData(true);
           else { alert(res.msg); adminState.loading = false; }
        }).apiAdminCancelOrder(orderId);
     };
@@ -417,29 +470,186 @@ createApp({
        adminState.loading = true;
        google.script.run.withSuccessHandler(res => {
           adminState.loading = false;
-          if(res.ok) { adminState.deptModal.open = false; loadAdminData(); }
+          if(res.ok) { adminState.deptModal.open = false; loadAdminData(true); }
           else alert(res.msg);
        }).apiSaveDepartment(adminState.deptModal.data);
     };
 
     const deleteDept = (id) => {
        if(!confirm("¿Eliminar departamento?")) return;
-       google.script.run.withSuccessHandler(res => { if(res.ok) loadAdminData(); else alert(res.msg); }).apiDeleteDepartment(id);
+       google.script.run.withSuccessHandler(res => { if(res.ok) loadAdminData(true); else alert(res.msg); }).apiDeleteDepartment(id);
     };
 
     // Config Actions
     const saveConfig = () => {
+       adminState.config['RESPONSIBLES_EMAILS_JSON'] = JSON.stringify(adminState.responsiblesList);
        adminState.loading = true;
        google.script.run.withSuccessHandler(res => {
           adminState.loading = false;
-          if(res.ok) { adminState.configEdit = false; loadAdminData(); }
+          if(res.ok) { adminState.configEdit = false; loadAdminData(true); }
           else alert(res.msg);
        }).apiSaveConfig(adminState.config);
     };
 
+    // Menu Actions
+    const checkMenuDate = () => {
+       if (!adminState.menuDate) return;
+       const d = new Date(adminState.menuDate + 'T12:00:00');
+       const day = d.getDay();
+       const now = new Date();
+       now.setHours(0,0,0,0);
+       const dZero = new Date(d);
+       dZero.setHours(0,0,0,0);
+
+       if (day === 0 || day === 6) {
+          alert("No se puede editar fines de semana.");
+          adminState.menuDate = '';
+          return;
+       }
+       if (dZero < now) { // Strict future? User said "fechas pasadas". Today might be allowed if open?
+          // User said "si ya pasan de la hora de cierre... deja de ser hábil".
+          // If I edit *today* after cut-off, it should be blocked.
+          // Frontend doesn't know cutoff easily without logic.
+          // But backend `apiGetMenuDay` will fail if strict.
+          // Frontend check: just past days.
+          alert("Solo se pueden editar fechas futuras o el día actual válido.");
+          adminState.menuDate = '';
+          return;
+       }
+       // If past, block.
+       if (dZero < now) {
+          alert("No se pueden editar fechas pasadas.");
+          adminState.menuDate = '';
+          return;
+       }
+
+       loadMenuDay();
+    };
+
+    const loadMenuDay = () => {
+       if(!adminState.menuDate) return;
+       adminState.loading = true;
+       google.script.run
+         .withSuccessHandler(res => {
+            adminState.loading = false;
+            if(res.ok) adminState.menuItems = res.items;
+            else {
+               alert(res.msg);
+               adminState.menuDate = '';
+               adminState.menuItems = [];
+            }
+         })
+         .withFailureHandler(err => {
+            adminState.loading = false;
+            alert(err.message);
+            adminState.menuDate = '';
+            adminState.menuItems = [];
+         })
+         .apiGetMenuDay(adminState.menuDate);
+    };
+
+    const openMenuModal = (item = null, cat = 'Arroces') => {
+       adminState.menuModal.isNew = !item;
+       adminState.menuModal.data = item ? {...item} : { cat, plato: '', desc: '' };
+       adminState.menuModal.open = true;
+    };
+
+    const saveMenuItem = () => {
+       if(!adminState.menuModal.data.plato) return alert("Nombre requerido");
+       adminState.loading = true;
+       google.script.run
+         .withSuccessHandler(res => {
+            adminState.loading = false;
+            if(res.ok) { adminState.menuModal.open = false; loadMenuDay(); }
+            else alert(res.msg);
+         })
+         .withFailureHandler(err => {
+            adminState.loading = false;
+            alert(err.message);
+         })
+         .apiSaveMenuItem(adminState.menuDate, adminState.menuModal.data.cat, adminState.menuModal.data);
+    };
+
+    const deleteMenuItem = (id) => {
+       if(!confirm("¿Eliminar plato?")) return;
+       adminState.loading = true;
+       google.script.run.withSuccessHandler(res => {
+          adminState.loading = false;
+          if(res.ok) loadMenuDay();
+          else alert(res.msg);
+       }).apiDeleteMenuItem(id);
+    };
+
+    // Holiday Actions
+    const saveHoliday = () => {
+       if(!adminState.holidayModal.data.date) return alert("Fecha requerida");
+       adminState.loading = true;
+       google.script.run
+         .withSuccessHandler(res => {
+            adminState.loading = false;
+            if(res.ok) {
+               adminState.holidayModal.open = false;
+               adminState.holidays.push({ date: adminState.holidayModal.data.date, desc: adminState.holidayModal.data.desc });
+               loadData(); // Refresh user view
+            }
+            else alert(res.msg);
+         })
+         .withFailureHandler(err => {
+            adminState.loading = false;
+            alert("Error: " + err.message);
+         })
+         .apiSaveHoliday(adminState.holidayModal.data.date, adminState.holidayModal.data.desc);
+    };
+
+    const deleteHoliday = (date) => {
+       if(!confirm("¿Eliminar día libre?")) return;
+       adminState.loading = true;
+       google.script.run.withSuccessHandler(res => {
+           adminState.loading = false;
+           if(res.ok) {
+              adminState.holidays = adminState.holidays.filter(h => h.date !== date);
+              loadData();
+           }
+       }).apiDeleteHoliday(date);
+    };
+
+    const clearFilters = (type) => {
+       if(type === 'orders') {
+          adminState.filters.orders = { search: '', dateStart: '', dateEnd: '', status: '', open: true };
+       } else {
+          adminState.filters.users.search = '';
+       }
+    };
+
+    const addResponsible = () => {
+       adminState.responsiblesList.push({ name: '', email: '', type: 'CC' });
+    };
+
+    const removeResponsible = (idx) => {
+       adminState.responsiblesList.splice(idx, 1);
+    };
+
+    const addDeptAdmin = (user) => {
+       if (user.rol === 'ADMIN_GEN') return alert("No se puede asignar un Admin General como Admin de Departamento.");
+       if (user.rol === 'ADMIN_DEP') {
+          if (!confirm(`Advertencia: ${user.nombre} dejará de ser admin de su departamento actual.`)) return;
+       }
+       let current = adminState.deptModal.data.admins ? adminState.deptModal.data.admins.split(',').map(e=>e.trim()).filter(e=>e) : [];
+       if (!current.includes(user.email)) {
+          current.push(user.email);
+          adminState.deptModal.data.admins = current.join(', ');
+       }
+    };
+
+    const removeDeptAdmin = (email) => {
+       let current = adminState.deptModal.data.admins ? adminState.deptModal.data.admins.split(',').map(e=>e.trim()).filter(e=>e) : [];
+       current = current.filter(e => e !== email);
+       adminState.deptModal.data.admins = current.join(', ');
+    };
+
     const dismissBanner = () => {
       showMultiDayBanner.value = false;
-      localStorage.setItem('multiDayBannerDismissed', 'true');
+      google.script.run.apiDismissBanner();
     };
 
     const submitOrder = () => {
@@ -545,7 +755,7 @@ createApp({
       toggleItem, isSelected, hasSelectionInCat, isCatDisabled, isItemDisabled,
       
       // Estado
-      remindersEnabled, showMultiDayBanner,
+      remindersEnabled, showMultiDayBanner, bannerConfig,
       activeUser, deptUsers, impersonateEmail,
       viewMode, adminState,
 
@@ -555,8 +765,15 @@ createApp({
 
       // Admin Actions
       openUserModal, saveUser, toggleUserStatus, adminCancelOrder,
-      openDeptModal, saveDept, deleteDept, saveConfig,
+      openDeptModal, saveDept, deleteDept, saveConfig, clearFilters,
       
+      // Dept Helpers
+      addDeptAdmin, removeDeptAdmin, deptAdminSearch, filteredAdminUsers, deptMoveHint,
+
+      // Menu/Holiday
+      checkMenuDate, loadMenuDay, openMenuModal, saveMenuItem, deleteMenuItem,
+      saveHoliday, deleteHoliday,
+
       // Filtered Data
       filteredUsers, filteredOrders,
 
