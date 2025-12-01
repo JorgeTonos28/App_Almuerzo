@@ -23,6 +23,7 @@ createApp({
     const allOrders = ref({});
     const remindersEnabled = ref(true);
     const showMultiDayBanner = ref(false);
+    const bannerConfig = ref({ text: '', limit: 5 });
     
     // Formulario
     const comments = ref('');
@@ -37,6 +38,7 @@ createApp({
        users: [],
        orders: [],
        departments: [],
+       deptMap: {}, // ID -> Name
        config: {},
        configKeys: [],
        holidays: [],
@@ -46,7 +48,13 @@ createApp({
        filters: {
           orders: { search: '', dateStart: '', dateEnd: '', status: '', open: false },
           users: { search: '' }
-       }
+       },
+       // Menu Editor
+       menuDate: '',
+       menuItems: [],
+       menuModal: { open: false, isNew: true, data: {} },
+       // Holiday Editor
+       holidayModal: { open: false, data: {} }
     });
 
     // === COMPUTED PROPERTIES ===
@@ -264,7 +272,12 @@ createApp({
             adminData.value = res.adminData;
             remindersEnabled.value = res.userPrefs?.reminders !== false;
 
-            if (!localStorage.getItem('multiDayBannerDismissed')) {
+            // Map Dept IDs if needed (e.g. for display in Admin)
+            if (res.deptMap) adminState.deptMap = res.deptMap;
+
+            bannerConfig.value = res.bannerConfig || { text: '', limit: 5 };
+            const bCount = res.userPrefs?.banner_count || 0;
+            if (bCount < bannerConfig.value.limit) {
               showMultiDayBanner.value = true;
             }
             
@@ -331,7 +344,7 @@ createApp({
 
     const toggleReminders = () => {
       remindersEnabled.value = !remindersEnabled.value;
-      google.script.run.apiSetUserPreference('reminders', remindersEnabled.value);
+      google.script.run.apiSetUserPreference('reminders', remindersEnabled.value, isDeptAdmin.value ? impersonateEmail.value : null);
     };
 
     const toggleAdminView = () => {
@@ -355,6 +368,10 @@ createApp({
                adminState.config = res.config || {};
                adminState.configKeys = res.configKeys || [];
                adminState.holidays = res.holidays || [];
+               // Also populate dept map from list
+               const map = {};
+               adminState.departments.forEach(d => map[d.id] = d.nombre);
+               adminState.deptMap = map;
             } else {
                alert(res.msg);
             }
@@ -437,9 +454,84 @@ createApp({
        }).apiSaveConfig(adminState.config);
     };
 
+    // Menu Actions
+    const loadMenuDay = () => {
+       if(!adminState.menuDate) return;
+       adminState.loading = true;
+       google.script.run.withSuccessHandler(res => {
+          adminState.loading = false;
+          if(res.ok) adminState.menuItems = res.items;
+          else alert(res.msg);
+       }).apiGetMenuDay(adminState.menuDate);
+    };
+
+    const openMenuModal = (item = null, cat = 'Arroces') => {
+       adminState.menuModal.isNew = !item;
+       adminState.menuModal.data = item ? {...item} : { cat, plato: '', desc: '' };
+       adminState.menuModal.open = true;
+    };
+
+    const saveMenuItem = () => {
+       if(!adminState.menuModal.data.plato) return alert("Nombre requerido");
+       adminState.loading = true;
+       google.script.run.withSuccessHandler(res => {
+          adminState.loading = false;
+          if(res.ok) { adminState.menuModal.open = false; loadMenuDay(); }
+          else alert(res.msg);
+       }).apiSaveMenuItem(adminState.menuDate, adminState.menuModal.data.cat, adminState.menuModal.data);
+    };
+
+    const deleteMenuItem = (id) => {
+       if(!confirm("¿Eliminar plato?")) return;
+       adminState.loading = true;
+       google.script.run.withSuccessHandler(res => {
+          adminState.loading = false;
+          if(res.ok) loadMenuDay();
+          else alert(res.msg);
+       }).apiDeleteMenuItem(id);
+    };
+
+    // Holiday Actions
+    const saveHoliday = () => {
+       if(!adminState.holidayModal.data.date) return alert("Fecha requerida");
+       adminState.loading = true;
+       google.script.run.withSuccessHandler(res => {
+          adminState.loading = false;
+          if(res.ok) { adminState.holidayModal.open = false; loadAdminData(); }
+          else alert(res.msg);
+       }).apiSaveHoliday(adminState.holidayModal.data.date, adminState.holidayModal.data.desc);
+    };
+
+    const deleteHoliday = (date) => {
+       if(!confirm("¿Eliminar día libre?")) return;
+       adminState.loading = true;
+       google.script.run.withSuccessHandler(res => {
+           adminState.loading = false;
+           if(res.ok) loadAdminData();
+       }).apiDeleteHoliday(date);
+    };
+
+    const clearFilters = (type) => {
+       if(type === 'orders') {
+          adminState.filters.orders = { search: '', dateStart: '', dateEnd: '', status: '', open: true };
+       } else {
+          adminState.filters.users.search = '';
+       }
+    };
+
+    const responsiblesJson = computed({
+        get: () => {
+            try { return JSON.parse(adminState.config['RESPONSIBLES_EMAILS_JSON'] || '{}'); }
+            catch(e) { return {}; }
+        },
+        set: (val) => {
+            adminState.config['RESPONSIBLES_EMAILS_JSON'] = JSON.stringify(val);
+        }
+    });
+
     const dismissBanner = () => {
       showMultiDayBanner.value = false;
-      localStorage.setItem('multiDayBannerDismissed', 'true');
+      google.script.run.apiDismissBanner();
     };
 
     const submitOrder = () => {
@@ -545,7 +637,7 @@ createApp({
       toggleItem, isSelected, hasSelectionInCat, isCatDisabled, isItemDisabled,
       
       // Estado
-      remindersEnabled, showMultiDayBanner,
+      remindersEnabled, showMultiDayBanner, bannerConfig,
       activeUser, deptUsers, impersonateEmail,
       viewMode, adminState,
 
@@ -555,8 +647,12 @@ createApp({
 
       // Admin Actions
       openUserModal, saveUser, toggleUserStatus, adminCancelOrder,
-      openDeptModal, saveDept, deleteDept, saveConfig,
+      openDeptModal, saveDept, deleteDept, saveConfig, clearFilters,
       
+      // Menu/Holiday
+      loadMenuDay, openMenuModal, saveMenuItem, deleteMenuItem,
+      saveHoliday, deleteHoliday, responsiblesJson,
+
       // Filtered Data
       filteredUsers, filteredOrders,
 
