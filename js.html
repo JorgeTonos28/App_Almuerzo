@@ -23,11 +23,14 @@ createApp({
     const allOrders = ref({});
     const remindersEnabled = ref(true);
     const showMultiDayBanner = ref(false);
+    const bannerConfig = ref({ text: '', limit: 5 });
     
     // Formulario
     const comments = ref('');
     const selection = reactive(new Set());
     const selectionData = reactive({});
+
+    const deptAdminSearch = ref('');
 
     // ADMIN STATE
     const viewMode = ref('USER'); // USER | ADMIN
@@ -37,7 +40,9 @@ createApp({
        users: [],
        orders: [],
        departments: [],
+       deptMap: {}, // ID -> Name
        config: {},
+       configList: [],
        configKeys: [],
        holidays: [],
        userModal: { open: false, isNew: true, data: {} },
@@ -46,7 +51,13 @@ createApp({
        filters: {
           orders: { search: '', dateStart: '', dateEnd: '', status: '', open: false },
           users: { search: '' }
-       }
+       },
+       // Menu Editor
+       menuDate: '',
+       menuItems: [],
+       menuModal: { open: false, isNew: true, data: {} },
+       // Holiday Editor
+       holidayModal: { open: false, data: {} }
     });
 
     // === COMPUTED PROPERTIES ===
@@ -64,6 +75,14 @@ createApp({
           u.nombre.toLowerCase().includes(q) ||
           u.email.toLowerCase().includes(q) ||
           u.departamento.toLowerCase().includes(q)
+       );
+    });
+
+    const filteredAdminUsers = computed(() => {
+       const q = deptAdminSearch.value.toLowerCase();
+       if (!q) return [];
+       return adminState.users.filter(u =>
+          u.nombre.toLowerCase().includes(q) || u.email.toLowerCase().includes(q)
        );
     });
 
@@ -264,7 +283,12 @@ createApp({
             adminData.value = res.adminData;
             remindersEnabled.value = res.userPrefs?.reminders !== false;
 
-            if (!localStorage.getItem('multiDayBannerDismissed')) {
+            // Map Dept IDs if needed (e.g. for display in Admin)
+            if (res.deptMap) adminState.deptMap = res.deptMap;
+
+            bannerConfig.value = res.bannerConfig || { text: '', limit: 5 };
+            const bCount = res.userPrefs?.banner_count || 0;
+            if (bCount < bannerConfig.value.limit) {
               showMultiDayBanner.value = true;
             }
             
@@ -331,7 +355,7 @@ createApp({
 
     const toggleReminders = () => {
       remindersEnabled.value = !remindersEnabled.value;
-      google.script.run.apiSetUserPreference('reminders', remindersEnabled.value);
+      google.script.run.apiSetUserPreference('reminders', remindersEnabled.value, isDeptAdmin.value ? impersonateEmail.value : null);
     };
 
     const toggleAdminView = () => {
@@ -343,7 +367,8 @@ createApp({
        }
     };
 
-    const loadAdminData = () => {
+    const loadAdminData = (force = false) => {
+       if (!force && adminState.users.length > 0) return;
        adminState.loading = true;
        google.script.run
          .withSuccessHandler(res => {
@@ -353,8 +378,13 @@ createApp({
                adminState.orders = res.orders;
                adminState.departments = res.departments || [];
                adminState.config = res.config || {};
+               adminState.configList = res.configList || [];
                adminState.configKeys = res.configKeys || [];
                adminState.holidays = res.holidays || [];
+               // Also populate dept map from list
+               const map = {};
+               adminState.departments.forEach(d => map[d.id] = d.nombre);
+               adminState.deptMap = map;
             } else {
                alert(res.msg);
             }
@@ -437,9 +467,116 @@ createApp({
        }).apiSaveConfig(adminState.config);
     };
 
+    // Menu Actions
+    const loadMenuDay = () => {
+       if(!adminState.menuDate) return;
+       adminState.loading = true;
+       google.script.run.withSuccessHandler(res => {
+          adminState.loading = false;
+          if(res.ok) adminState.menuItems = res.items;
+          else alert(res.msg);
+       }).apiGetMenuDay(adminState.menuDate);
+    };
+
+    const openMenuModal = (item = null, cat = 'Arroces') => {
+       adminState.menuModal.isNew = !item;
+       adminState.menuModal.data = item ? {...item} : { cat, plato: '', desc: '' };
+       adminState.menuModal.open = true;
+    };
+
+    const saveMenuItem = () => {
+       if(!adminState.menuModal.data.plato) return alert("Nombre requerido");
+       adminState.loading = true;
+       google.script.run.withSuccessHandler(res => {
+          adminState.loading = false;
+          if(res.ok) { adminState.menuModal.open = false; loadMenuDay(); }
+          else alert(res.msg);
+       }).apiSaveMenuItem(adminState.menuDate, adminState.menuModal.data.cat, adminState.menuModal.data);
+    };
+
+    const deleteMenuItem = (id) => {
+       if(!confirm("¿Eliminar plato?")) return;
+       adminState.loading = true;
+       google.script.run.withSuccessHandler(res => {
+          adminState.loading = false;
+          if(res.ok) loadMenuDay();
+          else alert(res.msg);
+       }).apiDeleteMenuItem(id);
+    };
+
+    // Holiday Actions
+    const saveHoliday = () => {
+       if(!adminState.holidayModal.data.date) return alert("Fecha requerida");
+       adminState.loading = true;
+       google.script.run.withSuccessHandler(res => {
+          adminState.loading = false;
+          if(res.ok) {
+             adminState.holidayModal.open = false;
+             adminState.holidays.push({ date: adminState.holidayModal.data.date, desc: adminState.holidayModal.data.desc });
+             loadData(); // Refresh user view
+          }
+          else alert(res.msg);
+       }).apiSaveHoliday(adminState.holidayModal.data.date, adminState.holidayModal.data.desc);
+    };
+
+    const deleteHoliday = (date) => {
+       if(!confirm("¿Eliminar día libre?")) return;
+       adminState.loading = true;
+       google.script.run.withSuccessHandler(res => {
+           adminState.loading = false;
+           if(res.ok) loadAdminData();
+       }).apiDeleteHoliday(date);
+    };
+
+    const clearFilters = (type) => {
+       if(type === 'orders') {
+          adminState.filters.orders = { search: '', dateStart: '', dateEnd: '', status: '', open: true };
+       } else {
+          adminState.filters.users.search = '';
+       }
+    };
+
+    const responsiblesJson = computed({
+        get: () => {
+            let parsed = {};
+            try { parsed = JSON.parse(adminState.config['RESPONSIBLES_EMAILS_JSON'] || '{}'); }
+            catch(e) { return {}; }
+            // Ensure structure
+            if (adminState.departments) {
+                adminState.departments.forEach(d => {
+                   if (!parsed[d.id]) parsed[d.id] = { name: '', email: '' };
+                   // Legacy string support
+                   if (typeof parsed[d.id] === 'string') parsed[d.id] = { name: '', email: parsed[d.id] };
+                });
+            }
+            return parsed;
+        },
+        set: (val) => {
+            adminState.config['RESPONSIBLES_EMAILS_JSON'] = JSON.stringify(val);
+        }
+    });
+
+    const addDeptAdmin = (user) => {
+       if (user.rol === 'ADMIN_GEN') return alert("No se puede asignar un Admin General como Admin de Departamento.");
+       if (user.rol === 'ADMIN_DEP') {
+          if (!confirm(`Advertencia: ${user.nombre} dejará de ser admin de su departamento actual.`)) return;
+       }
+       let current = adminState.deptModal.data.admins ? adminState.deptModal.data.admins.split(',').map(e=>e.trim()).filter(e=>e) : [];
+       if (!current.includes(user.email)) {
+          current.push(user.email);
+          adminState.deptModal.data.admins = current.join(', ');
+       }
+    };
+
+    const removeDeptAdmin = (email) => {
+       let current = adminState.deptModal.data.admins ? adminState.deptModal.data.admins.split(',').map(e=>e.trim()).filter(e=>e) : [];
+       current = current.filter(e => e !== email);
+       adminState.deptModal.data.admins = current.join(', ');
+    };
+
     const dismissBanner = () => {
       showMultiDayBanner.value = false;
-      localStorage.setItem('multiDayBannerDismissed', 'true');
+      google.script.run.apiDismissBanner();
     };
 
     const submitOrder = () => {
@@ -545,7 +682,7 @@ createApp({
       toggleItem, isSelected, hasSelectionInCat, isCatDisabled, isItemDisabled,
       
       // Estado
-      remindersEnabled, showMultiDayBanner,
+      remindersEnabled, showMultiDayBanner, bannerConfig,
       activeUser, deptUsers, impersonateEmail,
       viewMode, adminState,
 
@@ -555,8 +692,15 @@ createApp({
 
       // Admin Actions
       openUserModal, saveUser, toggleUserStatus, adminCancelOrder,
-      openDeptModal, saveDept, deleteDept, saveConfig,
+      openDeptModal, saveDept, deleteDept, saveConfig, clearFilters,
       
+      // Dept Helpers
+      addDeptAdmin, removeDeptAdmin, deptAdminSearch, filteredAdminUsers,
+
+      // Menu/Holiday
+      loadMenuDay, openMenuModal, saveMenuItem, deleteMenuItem,
+      saveHoliday, deleteHoliday, responsiblesJson,
+
       // Filtered Data
       filteredUsers, filteredOrders,
 
