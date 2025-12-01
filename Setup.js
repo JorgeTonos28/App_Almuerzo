@@ -59,6 +59,7 @@ function setupSheetsAndConfig(){
   });
 
   populateDefaultConfig_(ss.getSheetByName('Config'));
+  ensureBackupFolder_(ss.getSheetByName('Config'));
   populateSampleData_(ss); // Datos de prueba para que arranques rápido
   
   SpreadsheetApp.flush();
@@ -66,10 +67,45 @@ function setupSheetsAndConfig(){
   return 'OK';
 }
 
+function ensureBackupFolder_(configSheet) {
+  if (!configSheet) return;
+  const data = configSheet.getDataRange().getValues();
+  let row = -1;
+  let currentId = '';
+
+  for(let i=1; i<data.length; i++) {
+     if(data[i][0] === 'BACKUP_FOLDER_ID') {
+        row = i+1;
+        currentId = data[i][1];
+        break;
+     }
+  }
+
+  if (row > 0 && !currentId) {
+     try {
+        const ssFile = DriveApp.getFileById(SpreadsheetApp.getActive().getId());
+        const parents = ssFile.getParents();
+        if (parents.hasNext()) {
+           const parent = parents.next();
+           const folders = parent.getFoldersByName('Backups_Almuerzo');
+           let folder;
+           if (folders.hasNext()) folder = folders.next();
+           else folder = parent.createFolder('Backups_Almuerzo');
+
+           configSheet.getRange(row, 2).setValue(folder.getId());
+           Logger.log('Carpeta backup creada/asignada: ' + folder.getId());
+        }
+     } catch(e) {
+        Logger.log('Error creando carpeta backup: ' + e.message);
+     }
+  }
+}
+
 function populateDefaultConfig_(sheet){
   if (!sheet || sheet.getLastRow() > 1) return;
   const defaults = [
-    ['HORA_CIERRE', '14:00', 'Hora militar límite para pedidos del día siguiente'],
+    ['HORA_ENVIO', '15:00', 'Hora militar envío reportes a responsables (HH:MM)'],
+    ['MINUTOS_PREV_CIERRE', '30', 'Minutos antes del envío para cerrar pedidos'],
     ['HORA_RECORDATORIO', '13:00', 'Hora envío correos recordatorios'],
     ['ADMIN_EMAILS', 'tu_correo@ejemplo.com', 'Correos admin general separados por ;'],
     ['MAIL_SENDER_NAME', 'Comedor Institucional', 'Nombre remitente correos'],
@@ -78,18 +114,32 @@ function populateDefaultConfig_(sheet){
     ['BACKUP_FOLDER_ID', '', 'ID de carpeta Drive raíz para respaldos (Año/Mes/Semana)'],
     ['TEST_EMAIL_MODE', 'FALSE', 'Si es TRUE, todos los correos van a la dirección de prueba'],
     ['TEST_EMAIL_DEST', '', 'Correo de destino para modo de prueba'],
-    ['RESPONSIBLES_EMAILS_JSON', '{}', 'JSON mapeo Depto->Emails. Ej: {"Finanzas": "jefe@fin.com"}']
+    ['RESPONSIBLES_EMAILS_JSON', '{}', 'JSON mapeo DeptoID->Emails.'],
+    ['PLAN_WEEK_TEXT', '¡Planifica tu semana! Ahora puedes adelantar tus pedidos para todos los días disponibles.', 'Texto del banner de planificación'],
+    ['PLAN_WEEK_LIMIT', '5', 'Número de veces que se mostrará el banner al usuario']
   ];
   sheet.getRange(2, 1, defaults.length, 3).setValues(defaults);
 }
 
 function populateSampleData_(ss){
+  // Departamentos
+  const dSh = ss.getSheetByName('Departamentos');
+  // Usamos UUIDs fijos o generados para consistencia en la demo,
+  // pero aquí generamos dinámicos para que sea un ejemplo válido.
+  const deptTechId = Utilities.getUuid();
+  const deptFinId = Utilities.getUuid();
+
+  if (dSh.getLastRow() === 1) {
+     dSh.appendRow([deptTechId, 'Tecnología', Session.getActiveUser().getEmail(), 'ACTIVO', '{}']);
+     dSh.appendRow([deptFinId, 'Finanzas', 'jefe.demo@ejemplo.com', 'ACTIVO', '{}']);
+  }
+
   // Usuarios
   const uSh = ss.getSheetByName('Usuarios');
   if (uSh.getLastRow() === 1) {
-    uSh.appendRow([Session.getActiveUser().getEmail(), 'Admin Inicial', 'Tecnología', 'ADMIN_GEN', 'ACTIVO', '{}']);
-    uSh.appendRow(['usuario.demo@ejemplo.com', 'Pepe Usuario', 'Finanzas', 'USUARIO', 'ACTIVO', '{}']);
-    uSh.appendRow(['jefe.demo@ejemplo.com', 'Jefa Departamento', 'Finanzas', 'ADMIN_DEP', 'ACTIVO', '{}']);
+    uSh.appendRow([Session.getActiveUser().getEmail(), 'Admin Inicial', deptTechId, 'ADMIN_GEN', 'ACTIVO', '{}']);
+    uSh.appendRow(['usuario.demo@ejemplo.com', 'Pepe Usuario', deptFinId, 'USUARIO', 'ACTIVO', '{}']);
+    uSh.appendRow(['jefe.demo@ejemplo.com', 'Jefa Departamento', deptFinId, 'ADMIN_DEP', 'ACTIVO', '{}']);
   }
 
   // Menú de ejemplo (para mañana)
