@@ -72,4 +72,43 @@
   .animate-bounce-slow {
     animation: bounceSlow 3s infinite ease-in-out;
   }
+
+  @keyframes jumpSpin {
+    0% { transform: translateY(0) rotate(0deg); }
+    40% { transform: translateY(-15px) rotate(0deg); }
+    100% { transform: translateY(0) rotate(360deg); }
+  }
+  .animate-jump-spin {
+    animation: jumpSpin 0.8s ease-in-out;
+  }
+
+  /* Speech Bubble */
+  .speech-bubble {
+    position: absolute;
+    top: 100%; /* Below logo */
+    left: 0; /* Align left to parent (Logo container) */
+    /* Or center? The logo container is flex. */
+    background: #1f2937; /* Gray-900 */
+    color: white;
+    padding: 0.5rem 1rem;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    font-weight: bold;
+    white-space: nowrap;
+    z-index: 50;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    margin-top: 0.75rem;
+    left: 50%;
+    transform: translateX(-50%);
+  }
+  .speech-bubble::after {
+    content: '';
+    position: absolute;
+    top: -4px;
+    left: 50%;
+    margin-left: -4px;
+    border-width: 4px;
+    border-style: solid;
+    border-color: transparent transparent #1f2937 transparent;
+  }
 </style>

@@ -32,6 +32,12 @@ createApp({
 
     const deptAdminSearch = ref('');
 
+    // Logo Animation State
+    const logoAnimating = ref(false);
+    const bubbleVisible = ref(false);
+    const bubbleText = ref('');
+    const bubbleTimer = ref(null);
+
     // ADMIN STATE
     const viewMode = ref('USER'); // USER | ADMIN
     const adminState = reactive({
@@ -151,6 +157,7 @@ createApp({
       return dates.value.map(d => {
         const order = allOrders.value[d.value];
         const row = { date: d.value, label: d.label, items: {} };
+        let hasItems = false;
 
         if (order && order.detalle) {
           const det = order.detalle;
@@ -163,11 +170,12 @@ createApp({
                    // Append if multiple (e.g. Vegetariana)
                    row.items[cat] += ', ' + det.items[idx];
                 }
+                hasItems = true;
              });
           }
         }
-        return row;
-      });
+        return hasItems ? row : null;
+      }).filter(r => r !== null);
     });
 
     const displayDate = computed(() => {
@@ -706,6 +714,26 @@ createApp({
         .apiCancelOrder(myOrder.value.id);
     };
 
+    const triggerLogoAnimation = () => {
+       if (logoAnimating.value) return;
+
+       bubbleVisible.value = false;
+       if (bubbleTimer.value) clearTimeout(bubbleTimer.value);
+
+       logoAnimating.value = true;
+       setTimeout(() => {
+          logoAnimating.value = false;
+
+          const texts = ["¡Buen provecho!", "¡Que lo disfrutes!", "¡Excelente elección!", "¡Ñam ñam!", "¡Salud!"];
+          bubbleText.value = texts[Math.floor(Math.random() * texts.length)];
+          bubbleVisible.value = true;
+
+          bubbleTimer.value = setTimeout(() => {
+             bubbleVisible.value = false;
+          }, 4000);
+       }, 800);
+    };
+
     // UI Helpers
     const formatCatName = (c) => c.replace(/_/g, ' ');
     
@@ -784,7 +812,10 @@ createApp({
       formatCatName, scrollToCat, getIconForCategory,
 
       // Summary
-      userWeeklySummary, summaryHeaders
+      userWeeklySummary, summaryHeaders,
+
+      // Logo Animation
+      logoAnimating, bubbleVisible, bubbleText, triggerLogoAnimation
     };
   }
 }).mount('#app');
