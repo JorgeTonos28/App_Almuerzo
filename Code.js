@@ -1,7 +1,7 @@
 /**
  * Code.gs - Backend V5 (Refactor & New Features)
  */
-const APP_VERSION = 'v5.6-Final';
+const APP_VERSION = 'v5.10';
 
 // === RUTAS E INICIO ===
 
@@ -15,6 +15,8 @@ function doGet(e) {
   if (!user || user.estado !== 'ACTIVO') {
     const denied = HtmlService.createTemplateFromFile('Denied');
     denied.signatureUrl = t.signatureUrl;
+    denied.email = Session.getActiveUser().getEmail().toLowerCase();
+    denied.status = user ? user.estado : null;
     return denied.evaluate()
       .setTitle('Acceso Denegado')
       .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
@@ -107,6 +109,47 @@ function apiGetInitData(requestedDateStr, impersonateEmail) {
   } catch (e) {
     return { ok: false, msg: e.message };
   }
+}
+
+function apiRequestAccess(data) {
+  try {
+     const email = Session.getActiveUser().getEmail().toLowerCase();
+     if (!email.endsWith('@infotep.gob.do')) throw new Error("Dominio no permitido.");
+
+     const existing = getUserInfo_(email);
+     if (existing) {
+        if (existing.estado === 'PENDIENTE') throw new Error("Ya tienes una solicitud pendiente.");
+        if (existing.estado === 'ACTIVO') throw new Error("Tu cuenta ya está activa.");
+        if (existing.estado === 'INACTIVO') throw new Error("Tu cuenta está inactiva. Contacta a un administrador.");
+     }
+
+     const ss = SpreadsheetApp.getActive();
+     const sh = ss.getSheetByName('Usuarios');
+
+     // Validate Code Uniqueness
+     if (!/^\d{4}$/.test(data.code)) throw new Error("Código inválido. Deben ser 4 dígitos.");
+     const uData = sh.getDataRange().getValues();
+     for(let i=1; i<uData.length; i++) {
+        if (String(uData[i][6]) === String(data.code)) {
+           throw new Error("El código de empleado " + data.code + " ya está en uso.");
+        }
+     }
+
+     // Append PENDING user
+     sh.appendRow([email, data.name || 'Sin Nombre', data.dept || 'Sin Depto', 'USER', 'PENDIENTE', '{}', data.code]);
+
+     // Notify Admins
+     const admins = getConfigValue_('ADMIN_EMAILS');
+     if (admins) {
+        sendEmail_(admins, "Nueva Solicitud de Acceso",
+           `El usuario <b>${data.name}</b> (${email}) ha solicitado acceso al sistema de almuerzo.<br>` +
+           `Departamento: ${data.dept}<br><br>` +
+           `Ingresa al Panel de Administración para aprobarlo.`
+        );
+     }
+
+     return { ok: true };
+  } catch(e) { return { ok: false, msg: e.message }; }
 }
 
 function apiSubmitOrder(payload) {
@@ -313,7 +356,7 @@ function apiGetAdminData() {
     data.users = uSh.getDataRange().getValues().slice(1).map(r => ({
       email: r[0], nombre: r[1],
       departamentoId: r[2], departamento: deptMap[r[2]] || r[2], // Resolve for display
-      rol: r[3], estado: r[4]
+      rol: r[3], estado: r[4], codigo: r[6] || ''
     })).filter(u => user.rol === 'ADMIN_GEN' || (u.departamentoId === user.departamentoId));
 
     // Orders
@@ -485,10 +528,25 @@ function apiAdminSaveUser(userData) {
   const sh = ss.getSheetByName('Usuarios');
   const data = sh.getDataRange().getValues();
   let rowIdx = -1;
+  let prevStatus = null;
 
   for(let i=1; i<data.length; i++) {
      if (String(data[i][0]).toLowerCase() === String(userData.email).toLowerCase()) {
-        rowIdx = i+1; break;
+        rowIdx = i+1;
+        prevStatus = data[i][4];
+        break;
+     }
+  }
+
+  // Validate Code
+  if (!userData.codigo || !/^\d{4}$/.test(userData.codigo)) throw new Error("El código es obligatorio y debe tener 4 dígitos.");
+
+  // Uniqueness Check
+  for(let i=1; i<data.length; i++) {
+     if (i+1 !== rowIdx) { // Skip self
+        if (String(data[i][6]) === String(userData.codigo)) {
+           throw new Error("El código " + userData.codigo + " ya pertenece a otro usuario.");
+        }
      }
   }
 
@@ -498,11 +556,22 @@ function apiAdminSaveUser(userData) {
      userData.departamento, // This assumes ID is passed
      userData.rol || 'USER',
      userData.estado || 'ACTIVO',
-     (rowIdx > 0 ? data[rowIdx-1][5] : '{}')
+     (rowIdx > 0 ? data[rowIdx-1][5] : '{}'),
+     userData.codigo
   ];
 
-  if (rowIdx > 0) sh.getRange(rowIdx, 1, 1, 5).setValues([rowContent.slice(0,5)]);
+  if (rowIdx > 0) sh.getRange(rowIdx, 1, 1, rowContent.length).setValues([rowContent]);
   else sh.appendRow(rowContent);
+
+  // Send Notification if Activated
+  if (userData.estado === 'ACTIVO' && prevStatus !== 'ACTIVO') {
+     sendEmail_(userData.email, "Acceso Aprobado - Almuerzo",
+        `Hola ${userData.nombre},<br><br>` +
+        `Tu cuenta ha sido activada exitosamente.<br>` +
+        `Ya puedes ingresar al sistema para realizar tus pedidos.<br><br>` +
+        `<a href="${ScriptApp.getService().getUrl()}">Ingresar a la App</a>`
+     );
+  }
 
   return { ok: true };
 }
@@ -671,7 +740,8 @@ function getUserInfo_(targetEmail) {
         departamentoId: deptId,
         departamento: deptMap[deptId] || deptId, // Resolve name
         rol: data[i][3],
-        estado: data[i][4]
+        estado: data[i][4],
+        codigo: data[i][6] || ''
       };
     }
   }

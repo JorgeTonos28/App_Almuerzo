@@ -10,7 +10,7 @@ function setupSheetsAndConfig(){
     },
     {
       name: 'Usuarios', 
-      headers: ['email', 'nombre', 'departamento', 'rol', 'estado', 'preferencias_json'] 
+      headers: ['email', 'nombre', 'departamento', 'rol', 'estado', 'preferencias_json', 'codigo']
       // Roles: USUARIO, ADMIN_DEP, ADMIN_GEN
     },
     {
