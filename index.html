@@ -553,14 +553,19 @@
          <!-- Menu Module (New) -->
          <div v-if="adminState.tab === 'MENU'" class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
             <h2 class="text-xl font-bold text-gray-900 mb-4">Gestión de Menú</h2>
-            <div class="flex gap-4 mb-6 items-end">
-               <div>
-                  <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Fecha</label>
-                  <input type="date" v-model="adminState.menuDate" @change="checkMenuDate" :min="adminState.nextBusinessDay" class="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500">
+            <div class="flex flex-col md:flex-row gap-4 mb-6 md:items-end justify-between">
+               <div class="flex gap-4 items-end">
+                  <div>
+                     <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Fecha</label>
+                     <input type="date" v-model="adminState.menuDate" @change="checkMenuDate" :min="adminState.nextBusinessDay" class="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500">
+                  </div>
+                  <div v-if="adminState.menuDate" class="text-sm text-gray-500 pb-2">
+                     Editando menú para: <b>{{ adminState.menuDate }}</b>
+                  </div>
                </div>
-               <div v-if="adminState.menuDate" class="text-sm text-gray-500 pb-2">
-                  Editando menú para: <b>{{ adminState.menuDate }}</b>
-               </div>
+               <button @click="openMenuImportModal" class="bg-green-600 hover:bg-green-700 text-white text-xs font-bold py-2 px-4 rounded-lg flex items-center gap-2 shadow-sm transition-colors">
+                  <i class="fa-solid fa-file-import"></i> Importar Menú Semanal
+               </button>
             </div>
 
             <div v-if="!adminState.menuDate" class="text-center py-10 text-gray-400 bg-gray-50 rounded-xl border border-dashed border-gray-200">
@@ -768,6 +773,85 @@
              <button @click="saveMenuItem" class="px-4 py-2 rounded-lg text-sm font-bold bg-gray-900 text-white hover:bg-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2" :disabled="adminState.loading">
                 <i v-if="adminState.loading" class="fa-solid fa-circle-notch fa-spin"></i>
                 Guardar
+             </button>
+          </div>
+       </div>
+    </div>
+
+    <!-- Menu Import Modal -->
+    <div v-if="adminState.menuImportModal.open" class="fixed inset-0 z-[70] flex items-center justify-center p-4">
+       <div class="absolute inset-0 bg-gray-900/50 backdrop-blur-sm" @click="adminState.menuImportModal.open = false"></div>
+       <div class="bg-white rounded-2xl shadow-xl w-full max-w-4xl relative overflow-hidden animate-fade-in-up flex flex-col max-h-[90vh]">
+          <div class="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50 shrink-0">
+             <h3 class="font-bold text-lg text-gray-800">Importar Menú Semanal</h3>
+             <button @click="adminState.menuImportModal.open = false" class="text-gray-400 hover:text-gray-600"><i class="fa-solid fa-xmark"></i></button>
+          </div>
+
+          <div class="p-6 overflow-y-auto grow">
+             <!-- Step 1: Input -->
+             <div v-if="adminState.menuImportModal.step === 1" class="space-y-4">
+                 <div class="bg-blue-50 p-4 rounded-xl text-blue-800 text-sm mb-4">
+                    <i class="fa-solid fa-circle-info mr-2"></i> Copia las celdas del Excel (incluyendo encabezados de categoría) y pégalas aquí. Asegúrate de seleccionar la semana correcta.
+                 </div>
+
+                 <div>
+                    <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Inicio de Semana (Lunes)</label>
+                    <input v-model="adminState.menuImportModal.weekStart" type="date" class="w-full md:w-1/3 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                 </div>
+
+                 <div>
+                    <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Contenido del Menú</label>
+                    <textarea v-model="adminState.menuImportModal.text" rows="10" placeholder="Pega aquí las celdas del Excel..." class="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs font-mono focus:ring-2 focus:ring-blue-500 outline-none"></textarea>
+                 </div>
+
+                 <div v-if="adminState.menuImportModal.error" class="bg-red-50 text-red-600 p-3 rounded-lg text-sm font-semibold animate-shake">
+                    <i class="fa-solid fa-circle-exclamation mr-1"></i> {{ adminState.menuImportModal.error }}
+                 </div>
+             </div>
+
+             <!-- Step 2: Preview -->
+             <div v-if="adminState.menuImportModal.step === 2" class="space-y-4">
+                 <div class="bg-green-50 p-4 rounded-xl text-green-800 text-sm mb-4 flex justify-between items-center">
+                    <span><i class="fa-solid fa-check-circle mr-2"></i> Datos procesados correctamente. Verifica antes de guardar.</span>
+                    <button @click="adminState.menuImportModal.step = 1" class="text-xs font-bold underline hover:text-green-900">Volver a editar</button>
+                 </div>
+
+                 <div class="overflow-x-auto border border-gray-200 rounded-xl">
+                    <table class="w-full text-xs text-left">
+                       <thead class="bg-gray-50 text-gray-500 font-bold uppercase border-b border-gray-200">
+                          <tr>
+                             <th class="p-3 sticky left-0 bg-gray-50 border-r border-gray-200 z-10 w-24">Categoría</th>
+                             <th v-for="d in adminState.menuImportModal.preview" :key="d.date" class="p-3 min-w-[150px]">
+                                {{ d.date }}
+                             </th>
+                          </tr>
+                       </thead>
+                       <tbody class="divide-y divide-gray-100">
+                          <tr v-for="cat in summaryHeaders" :key="cat">
+                             <td class="p-3 font-bold text-gray-900 bg-gray-50 sticky left-0 border-r border-gray-200 z-10">{{ formatCatName(cat) }}</td>
+                             <td v-for="d in adminState.menuImportModal.preview" :key="d.date" class="p-3 align-top">
+                                <ul v-if="d.items[cat] && d.items[cat].length" class="list-disc list-inside text-gray-600">
+                                   <li v-for="item in d.items[cat]" :key="item">{{ item }}</li>
+                                </ul>
+                                <span v-else class="text-gray-300 italic">-</span>
+                             </td>
+                          </tr>
+                       </tbody>
+                    </table>
+                 </div>
+             </div>
+          </div>
+
+          <div class="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3 shrink-0">
+             <button @click="adminState.menuImportModal.open = false" class="px-4 py-2 rounded-lg text-sm font-bold text-gray-500 hover:bg-gray-200 transition-colors" :disabled="adminState.loading">Cancelar</button>
+
+             <button v-if="adminState.menuImportModal.step === 1" @click="processMenuImport" class="px-6 py-2 rounded-lg text-sm font-bold bg-gray-900 text-white hover:bg-black transition-colors flex items-center gap-2">
+                Procesar <i class="fa-solid fa-arrow-right"></i>
+             </button>
+
+             <button v-if="adminState.menuImportModal.step === 2" @click="saveWeeklyMenu" class="px-6 py-2 rounded-lg text-sm font-bold bg-blue-600 text-white hover:bg-blue-700 transition-colors flex items-center gap-2 disabled:opacity-50" :disabled="adminState.loading">
+                <i v-if="adminState.loading" class="fa-solid fa-circle-notch fa-spin"></i>
+                Confirmar e Importar
              </button>
           </div>
        </div>
