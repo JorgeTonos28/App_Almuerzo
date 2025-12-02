@@ -1,7 +1,7 @@
 /**
  * Code.gs - Backend V5 (Refactor & New Features)
  */
-const APP_VERSION = 'v5.11';
+const APP_VERSION = 'v5.12';
 
 // === RUTAS E INICIO ===
 
@@ -678,6 +678,55 @@ function apiDeleteMenuItem(id) {
       }
    }
    return { ok: false, msg: "No encontrado" };
+}
+
+function apiSaveWeeklyMenu(menuData) {
+   const admin = getUserInfo_();
+   if (!admin || admin.rol !== 'ADMIN_GEN') throw new Error("Denegado");
+
+   const ss = SpreadsheetApp.getActive();
+   const sh = ss.getSheetByName('Menu');
+   const data = sh.getDataRange().getValues();
+
+   // Normalize keys to ensure matching
+   const datesToUpdate = new Set();
+   Object.keys(menuData).forEach(k => datesToUpdate.add(formatDate_(new Date(k + 'T12:00:00'))));
+
+   // 1. Identify rows to delete (indices, descending)
+   const rowsToDelete = [];
+   for (let i = data.length - 1; i >= 1; i--) {
+      let raw = data[i][1];
+      let dObj = (typeof raw === 'string' && raw.match(/^\d{4}-\d{2}-\d{2}$/)) ? new Date(raw + 'T12:00:00') : new Date(raw);
+      const rowDate = formatDate_(dObj);
+      if (datesToUpdate.has(rowDate)) {
+         rowsToDelete.push(i + 1);
+      }
+   }
+
+   // 2. Delete rows
+   rowsToDelete.forEach(r => sh.deleteRow(r));
+
+   // 3. Prepare new rows
+   const allNewRows = [];
+   // Iterate over the keys provided by client to maintain association
+   Object.keys(menuData).forEach(dateKey => {
+      const normalizedDate = formatDate_(new Date(dateKey + 'T12:00:00'));
+      // Only proceed if it was marked for update (double check)
+      if (datesToUpdate.has(normalizedDate)) {
+         const items = menuData[dateKey] || [];
+         const dateObj = new Date(normalizedDate + 'T12:00:00');
+         items.forEach(item => {
+            allNewRows.push([Utilities.getUuid(), dateObj, item.cat, item.plato, item.desc || '', 'SI']);
+         });
+      }
+   });
+
+   // 4. Append
+   if (allNewRows.length > 0) {
+      sh.getRange(sh.getLastRow() + 1, 1, allNewRows.length, allNewRows[0].length).setValues(allNewRows);
+   }
+
+   return { ok: true };
 }
 
 // === HOLIDAYS API ===

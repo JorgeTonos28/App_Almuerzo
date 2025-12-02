@@ -89,6 +89,8 @@ createApp({
        menuDate: '',
        menuItems: [],
        menuModal: { open: false, isNew: true, data: {} },
+       // Menu Import
+       menuImportModal: { open: false, step: 1, weekStart: '', text: '', preview: [], error: null },
        // Holiday Editor
        holidayModal: { open: false, data: {} },
        nextBusinessDay: '',
@@ -612,6 +614,154 @@ createApp({
        });
     };
 
+    // Menu Import Logic
+    const openMenuImportModal = () => {
+       adminState.menuImportModal = { open: true, step: 1, weekStart: '', text: '', preview: [], error: null };
+    };
+
+    const processMenuImport = () => {
+       const text = adminState.menuImportModal.text;
+       const weekStart = adminState.menuImportModal.weekStart;
+
+       if(!weekStart) {
+          adminState.menuImportModal.error = "Selecciona la fecha de inicio (Lunes).";
+          return;
+       }
+       if(!text.trim()) {
+          adminState.menuImportModal.error = "Pega el contenido del Excel.";
+          return;
+       }
+
+       // 1. Calculate Working Days
+       const startDate = new Date(weekStart + 'T12:00:00');
+       if(startDate.getDay() !== 1) {
+          adminState.menuImportModal.error = "La fecha de inicio debe ser Lunes.";
+          return;
+       }
+
+       const workingDays = [];
+       const holidaySet = new Set(adminState.holidays.map(h => h.date));
+
+       // Check Mon-Fri
+       for(let i=0; i<5; i++) {
+          const d = new Date(startDate);
+          d.setDate(d.getDate() + i);
+          // Format YYYY-MM-DD manually to avoid timezone issues with toISOString
+          const year = d.getFullYear();
+          const month = String(d.getMonth() + 1).padStart(2, '0');
+          const day = String(d.getDate()).padStart(2, '0');
+          const dStr = `${year}-${month}-${day}`;
+
+          if(!holidaySet.has(dStr)) {
+             workingDays.push({ date: dStr, label: ['Lunes','Martes','Miércoles','Jueves','Viernes'][i] });
+          }
+       }
+
+       // 2. Parse Text
+       const lines = text.split('\n').map(l => l.trimEnd()); // Keep tabs
+       const catMap = {
+          'ARROCES': 'Arroces', 'GRANOS': 'Granos', 'CARNES': 'Carnes',
+          'VIVERES': 'Viveres', 'VÍVERES': 'Viveres', 'ENSALADAS': 'Ensaladas',
+          'VEGETARIANA': 'Vegetariana', 'OPCION RAPIDA': 'Opcion_Rapida',
+          'OPCIÓN RÁPIDA': 'Opcion_Rapida', 'CALDOS': 'Caldo', 'CALDO': 'Caldo'
+       };
+       const knownCats = Object.keys(catMap);
+
+       let currentCat = null;
+       const columns = {}; // Idx -> { Cat -> [items] }
+
+       lines.forEach(line => {
+          if(!line.trim()) return;
+          const cells = line.split('\t').map(c => c.trim());
+
+          // Detect Category Header
+          const firstCellUpper = cells[0].toUpperCase();
+          const match = knownCats.find(k => k === firstCellUpper || (cells.length > 1 && cells[1].toUpperCase() === k));
+
+          if(match) {
+             currentCat = catMap[match];
+             return;
+          }
+
+          if(currentCat) {
+             cells.forEach((cell, idx) => {
+                if(cell && !['N/A', 'n/a', 'N/a'].includes(cell)) {
+                   if(!columns[idx]) columns[idx] = {};
+                   if(!columns[idx][currentCat]) columns[idx][currentCat] = [];
+                   columns[idx][currentCat].push(cell);
+                }
+             });
+          }
+       });
+
+       const colIndices = Object.keys(columns).map(Number).sort((a,b)=>a-b);
+       const numCols = colIndices.length > 0 ? (colIndices[colIndices.length-1] + 1) : 0;
+
+       // Validation Rule
+       let dateMapping = [];
+
+       if (numCols === 5) {
+          // Map 0->Mon ... 4->Fri
+          for(let i=0; i<5; i++) {
+             const d = new Date(startDate);
+             d.setDate(d.getDate() + i);
+             const year = d.getFullYear();
+             const month = String(d.getMonth() + 1).padStart(2, '0');
+             const day = String(d.getDate()).padStart(2, '0');
+             const dStr = `${year}-${month}-${day}`;
+
+             if(!holidaySet.has(dStr)) {
+                if(columns[i]) dateMapping.push({ date: dStr, items: columns[i] });
+             }
+          }
+       } else if (numCols === workingDays.length) {
+          // Map sequentially
+          workingDays.forEach((wd, idx) => {
+             if(columns[idx]) dateMapping.push({ date: wd.date, items: columns[idx] });
+          });
+       } else {
+          adminState.menuImportModal.error = `Columnas detectadas: ${numCols}. Se esperaban 5 (Semana completa) o ${workingDays.length} (Días laborables).`;
+          return;
+       }
+
+       if (dateMapping.length === 0) {
+          adminState.menuImportModal.error = "No se encontraron platos válidos.";
+          return;
+       }
+
+       adminState.menuImportModal.preview = dateMapping;
+       adminState.menuImportModal.step = 2;
+       adminState.menuImportModal.error = null;
+    };
+
+    const saveWeeklyMenu = () => {
+       const data = {};
+       adminState.menuImportModal.preview.forEach(day => {
+          const items = [];
+          Object.keys(day.items).forEach(cat => {
+             day.items[cat].forEach(plato => {
+                items.push({ cat, plato });
+             });
+          });
+          data[day.date] = items;
+       });
+
+       adminState.loading = true;
+       google.script.run
+         .withSuccessHandler(res => {
+            adminState.loading = false;
+            if(res.ok) {
+               adminState.menuImportModal.open = false;
+               showModal("Menú importado exitosamente.", "Éxito");
+               // Reload current view
+               loadMenuDay();
+            } else {
+               showModal(res.msg, "Error");
+            }
+         })
+         .apiSaveWeeklyMenu(data);
+    };
+
     // Holiday Actions
     const saveHoliday = () => {
        if(!adminState.holidayModal.data.date) return showModal("La fecha es requerida.");
@@ -830,6 +980,7 @@ createApp({
       // Menu/Holiday
       checkMenuDate, loadMenuDay, openMenuModal, saveMenuItem, deleteMenuItem,
       saveHoliday, deleteHoliday,
+      openMenuImportModal, processMenuImport, saveWeeklyMenu,
       
       // Responsibles
       addResponsible, removeResponsible,
