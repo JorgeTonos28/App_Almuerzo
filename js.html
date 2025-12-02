@@ -32,6 +32,39 @@ createApp({
 
     const deptAdminSearch = ref('');
 
+    // Logo Animation State
+    const logoAnimating = ref(false);
+    const bubbleVisible = ref(false);
+    const bubbleText = ref('');
+    const bubbleTimer = ref(null);
+
+    // Message Modal State
+    const msgModal = reactive({
+       open: false,
+       title: '',
+       message: '',
+       type: 'ALERT', // ALERT | CONFIRM
+       onConfirm: null
+    });
+
+    const showModal = (msg, title = 'Atención', type = 'ALERT', onOk = null) => {
+       msgModal.message = msg;
+       msgModal.title = title;
+       msgModal.type = type;
+       msgModal.onConfirm = onOk;
+       msgModal.open = true;
+    };
+
+    const closeMsgModal = () => {
+       msgModal.open = false;
+       msgModal.onConfirm = null;
+    };
+
+    const confirmMsgModal = () => {
+       if(msgModal.onConfirm) msgModal.onConfirm();
+       closeMsgModal();
+    };
+
     // ADMIN STATE
     const viewMode = ref('USER'); // USER | ADMIN
     const adminState = reactive({
@@ -76,6 +109,7 @@ createApp({
        return adminState.users.filter(u =>
           u.nombre.toLowerCase().includes(q) ||
           u.email.toLowerCase().includes(q) ||
+          (u.codigo && u.codigo.includes(q)) ||
           u.departamento.toLowerCase().includes(q)
        );
     });
@@ -151,6 +185,7 @@ createApp({
       return dates.value.map(d => {
         const order = allOrders.value[d.value];
         const row = { date: d.value, label: d.label, items: {} };
+        let hasItems = false;
 
         if (order && order.detalle) {
           const det = order.detalle;
@@ -163,11 +198,12 @@ createApp({
                    // Append if multiple (e.g. Vegetariana)
                    row.items[cat] += ', ' + det.items[idx];
                 }
+                hasItems = true;
              });
           }
         }
-        return row;
-      });
+        return hasItems ? row : null;
+      }).filter(r => r !== null);
     });
 
     const displayDate = computed(() => {
@@ -316,12 +352,12 @@ createApp({
             currentDate.value = res.currentDate;
             dates.value = res.dates;
           } else {
-            alert("Error cargando datos: " + res.msg);
+            showModal("Error cargando datos: " + res.msg, "Error");
           }
         })
         .withFailureHandler(err => {
           loading.value = false;
-          alert("Error de conexión con el servidor.");
+          showModal("Error de conexión con el servidor.", "Error de Red");
         })
         .apiGetInitData(targetDate, impersonateEmail.value);
     };
@@ -421,12 +457,14 @@ createApp({
     // Admin Actions
     const openUserModal = (u = null) => {
        adminState.userModal.isNew = !u;
-       adminState.userModal.data = u ? { ...u } : { email: '', nombre: '', departamento: activeUser.value.departamento || '', rol: 'USUARIO', estado: 'ACTIVO' };
+       adminState.userModal.data = u ? { ...u } : { email: '', nombre: '', codigo: '', departamento: activeUser.value.departamento || '', rol: 'USUARIO', estado: 'ACTIVO' };
        adminState.userModal.open = true;
     };
 
     const saveUser = () => {
-       if(!adminState.userModal.data.email || !adminState.userModal.data.nombre) return alert("Faltan datos");
+       if(!adminState.userModal.data.email || !adminState.userModal.data.nombre || !adminState.userModal.data.codigo) return showModal("Faltan datos requeridos (Email, Nombre y Código).");
+       if(!/^\d{4}$/.test(adminState.userModal.data.codigo)) return showModal("El código debe ser de 4 dígitos numéricos.");
+
        adminState.loading = true;
        google.script.run
          .withSuccessHandler(res => {
@@ -435,27 +473,29 @@ createApp({
                adminState.userModal.open = false;
                loadAdminData(true);
             } else {
-               alert(res.msg);
+               showModal(res.msg, "Error");
             }
          })
          .apiAdminSaveUser(adminState.userModal.data);
     };
 
     const toggleUserStatus = (u) => {
-       if(!confirm(`¿${u.estado === 'ACTIVO' ? 'Desactivar' : 'Activar'} a ${u.nombre}?`)) return;
-       const newState = u.estado === 'ACTIVO' ? 'INACTIVO' : 'ACTIVO';
-       const payload = { ...u, estado: newState };
-       adminState.loading = true;
-       google.script.run.withSuccessHandler(() => { loadAdminData(true); }).apiAdminSaveUser(payload);
+       showModal(`¿${u.estado === 'ACTIVO' ? 'Desactivar' : 'Activar'} a ${u.nombre}?`, "Confirmar Cambio", "CONFIRM", () => {
+          const newState = u.estado === 'ACTIVO' ? 'INACTIVO' : 'ACTIVO';
+          const payload = { ...u, estado: newState };
+          adminState.loading = true;
+          google.script.run.withSuccessHandler(() => { loadAdminData(true); }).apiAdminSaveUser(payload);
+       });
     };
 
     const adminCancelOrder = (orderId) => {
-       if(!confirm("¿Cancelar pedido?")) return;
-       adminState.loading = true;
-       google.script.run.withSuccessHandler(res => {
-          if(res.ok) loadAdminData(true);
-          else { alert(res.msg); adminState.loading = false; }
-       }).apiAdminCancelOrder(orderId);
+       showModal("¿Estás seguro de cancelar este pedido?", "Cancelar Pedido", "CONFIRM", () => {
+          adminState.loading = true;
+          google.script.run.withSuccessHandler(res => {
+             if(res.ok) loadAdminData(true);
+             else { showModal(res.msg, "Error"); adminState.loading = false; }
+          }).apiAdminCancelOrder(orderId);
+       });
     };
 
     // Department Actions
@@ -466,18 +506,20 @@ createApp({
     };
 
     const saveDept = () => {
-       if(!adminState.deptModal.data.nombre) return alert("Nombre requerido");
+       if(!adminState.deptModal.data.nombre) return showModal("El nombre del departamento es obligatorio.");
        adminState.loading = true;
        google.script.run.withSuccessHandler(res => {
           adminState.loading = false;
           if(res.ok) { adminState.deptModal.open = false; loadAdminData(true); }
-          else alert(res.msg);
+          else showModal(res.msg, "Error");
        }).apiSaveDepartment(adminState.deptModal.data);
     };
 
     const deleteDept = (id) => {
-       if(!confirm("¿Eliminar departamento?")) return;
-       google.script.run.withSuccessHandler(res => { if(res.ok) loadAdminData(true); else alert(res.msg); }).apiDeleteDepartment(id);
+       showModal("¿Eliminar departamento? Esta acción no se puede deshacer.", "Eliminar Depto", "CONFIRM", () => {
+           adminState.loading = true;
+           google.script.run.withSuccessHandler(res => { if(res.ok) loadAdminData(true); else showModal(res.msg, "Error"); adminState.loading = false; }).apiDeleteDepartment(id);
+       });
     };
 
     // Config Actions
@@ -487,7 +529,7 @@ createApp({
        google.script.run.withSuccessHandler(res => {
           adminState.loading = false;
           if(res.ok) { adminState.configEdit = false; loadAdminData(true); }
-          else alert(res.msg);
+          else showModal(res.msg, "Error");
        }).apiSaveConfig(adminState.config);
     };
 
@@ -502,23 +544,12 @@ createApp({
        dZero.setHours(0,0,0,0);
 
        if (day === 0 || day === 6) {
-          alert("No se puede editar fines de semana.");
+          showModal("No se puede editar fines de semana.", "Fecha Inválida");
           adminState.menuDate = '';
           return;
        }
-       if (dZero < now) { // Strict future? User said "fechas pasadas". Today might be allowed if open?
-          // User said "si ya pasan de la hora de cierre... deja de ser hábil".
-          // If I edit *today* after cut-off, it should be blocked.
-          // Frontend doesn't know cutoff easily without logic.
-          // But backend `apiGetMenuDay` will fail if strict.
-          // Frontend check: just past days.
-          alert("Solo se pueden editar fechas futuras o el día actual válido.");
-          adminState.menuDate = '';
-          return;
-       }
-       // If past, block.
        if (dZero < now) {
-          alert("No se pueden editar fechas pasadas.");
+          showModal("Solo se pueden editar fechas futuras o el día actual válido.", "Fecha Inválida");
           adminState.menuDate = '';
           return;
        }
@@ -534,14 +565,14 @@ createApp({
             adminState.loading = false;
             if(res.ok) adminState.menuItems = res.items;
             else {
-               alert(res.msg);
+               showModal(res.msg, "Error");
                adminState.menuDate = '';
                adminState.menuItems = [];
             }
          })
          .withFailureHandler(err => {
             adminState.loading = false;
-            alert(err.message);
+            showModal(err.message, "Error");
             adminState.menuDate = '';
             adminState.menuItems = [];
          })
@@ -555,34 +586,35 @@ createApp({
     };
 
     const saveMenuItem = () => {
-       if(!adminState.menuModal.data.plato) return alert("Nombre requerido");
+       if(!adminState.menuModal.data.plato) return showModal("El nombre del plato es requerido.");
        adminState.loading = true;
        google.script.run
          .withSuccessHandler(res => {
             adminState.loading = false;
             if(res.ok) { adminState.menuModal.open = false; loadMenuDay(); }
-            else alert(res.msg);
+            else showModal(res.msg, "Error");
          })
          .withFailureHandler(err => {
             adminState.loading = false;
-            alert(err.message);
+            showModal(err.message, "Error");
          })
          .apiSaveMenuItem(adminState.menuDate, adminState.menuModal.data.cat, adminState.menuModal.data);
     };
 
     const deleteMenuItem = (id) => {
-       if(!confirm("¿Eliminar plato?")) return;
-       adminState.loading = true;
-       google.script.run.withSuccessHandler(res => {
-          adminState.loading = false;
-          if(res.ok) loadMenuDay();
-          else alert(res.msg);
-       }).apiDeleteMenuItem(id);
+       showModal("¿Eliminar plato?", "Confirmar", "CONFIRM", () => {
+           adminState.loading = true;
+           google.script.run.withSuccessHandler(res => {
+              adminState.loading = false;
+              if(res.ok) loadMenuDay();
+              else showModal(res.msg, "Error");
+           }).apiDeleteMenuItem(id);
+       });
     };
 
     // Holiday Actions
     const saveHoliday = () => {
-       if(!adminState.holidayModal.data.date) return alert("Fecha requerida");
+       if(!adminState.holidayModal.data.date) return showModal("La fecha es requerida.");
        adminState.loading = true;
        google.script.run
          .withSuccessHandler(res => {
@@ -592,25 +624,26 @@ createApp({
                adminState.holidays.push({ date: adminState.holidayModal.data.date, desc: adminState.holidayModal.data.desc });
                loadData(); // Refresh user view
             }
-            else alert(res.msg);
+            else showModal(res.msg, "Error");
          })
          .withFailureHandler(err => {
             adminState.loading = false;
-            alert("Error: " + err.message);
+            showModal("Error: " + err.message, "Error");
          })
          .apiSaveHoliday(adminState.holidayModal.data.date, adminState.holidayModal.data.desc);
     };
 
     const deleteHoliday = (date) => {
-       if(!confirm("¿Eliminar día libre?")) return;
-       adminState.loading = true;
-       google.script.run.withSuccessHandler(res => {
-           adminState.loading = false;
-           if(res.ok) {
-              adminState.holidays = adminState.holidays.filter(h => h.date !== date);
-              loadData();
-           }
-       }).apiDeleteHoliday(date);
+       showModal("¿Eliminar día libre?", "Confirmar", "CONFIRM", () => {
+           adminState.loading = true;
+           google.script.run.withSuccessHandler(res => {
+               adminState.loading = false;
+               if(res.ok) {
+                  adminState.holidays = adminState.holidays.filter(h => h.date !== date);
+                  loadData();
+               }
+           }).apiDeleteHoliday(date);
+       });
     };
 
     const clearFilters = (type) => {
@@ -630,14 +663,20 @@ createApp({
     };
 
     const addDeptAdmin = (user) => {
-       if (user.rol === 'ADMIN_GEN') return alert("No se puede asignar un Admin General como Admin de Departamento.");
+       if (user.rol === 'ADMIN_GEN') return showModal("No se puede asignar un Admin General como Admin de Departamento.");
+
+       const proceed = () => {
+          let current = adminState.deptModal.data.admins ? adminState.deptModal.data.admins.split(',').map(e=>e.trim()).filter(e=>e) : [];
+          if (!current.includes(user.email)) {
+             current.push(user.email);
+             adminState.deptModal.data.admins = current.join(', ');
+          }
+       };
+
        if (user.rol === 'ADMIN_DEP') {
-          if (!confirm(`Advertencia: ${user.nombre} dejará de ser admin de su departamento actual.`)) return;
-       }
-       let current = adminState.deptModal.data.admins ? adminState.deptModal.data.admins.split(',').map(e=>e.trim()).filter(e=>e) : [];
-       if (!current.includes(user.email)) {
-          current.push(user.email);
-          adminState.deptModal.data.admins = current.join(', ');
+          showModal(`Advertencia: ${user.nombre} dejará de ser admin de su departamento actual. ¿Continuar?`, "Cambio de Depto", "CONFIRM", proceed);
+       } else {
+          proceed();
        }
     };
 
@@ -671,39 +710,57 @@ createApp({
         .withSuccessHandler(res => {
           submitting.value = false;
           if (res.ok) {
-            // Recargar la misma fecha para ver la confirmación
             loadData(currentDate.value); 
           } else {
-            alert("Error: " + res.msg);
+            showModal("Error: " + res.msg, "Error");
           }
         })
         .withFailureHandler(() => {
           submitting.value = false;
-          alert("Error enviando el pedido. Intenta nuevamente.");
+          showModal("Error enviando el pedido. Intenta nuevamente.", "Error");
         })
         .apiSubmitOrder(payload);
     };
 
     const cancelOrder = () => {
       if (!myOrder.value) return;
-      if (!confirm("¿Estás seguro de cancelar este pedido?")) return;
-      
-      loading.value = true;
-      google.script.run
-        .withSuccessHandler(res => {
-           if (res.ok) {
-             // Al cancelar, recargamos datos de la fecha actual
-             loadData(currentDate.value);
-           } else {
-             alert(res.msg);
-             loading.value = false;
-           }
-        })
-        .withFailureHandler(() => {
-          loading.value = false;
-          alert("Error al cancelar.");
-        })
-        .apiCancelOrder(myOrder.value.id);
+      showModal("¿Estás seguro de cancelar este pedido?", "Cancelar Pedido", "CONFIRM", () => {
+          loading.value = true;
+          google.script.run
+            .withSuccessHandler(res => {
+               if (res.ok) {
+                 loadData(currentDate.value);
+               } else {
+                 showModal(res.msg, "Error");
+                 loading.value = false;
+               }
+            })
+            .withFailureHandler(() => {
+              loading.value = false;
+              showModal("Error al cancelar.", "Error");
+            })
+            .apiCancelOrder(myOrder.value.id);
+      });
+    };
+
+    const triggerLogoAnimation = () => {
+       if (logoAnimating.value) return;
+
+       bubbleVisible.value = false;
+       if (bubbleTimer.value) clearTimeout(bubbleTimer.value);
+
+       logoAnimating.value = true;
+       setTimeout(() => {
+          logoAnimating.value = false;
+
+          const texts = ["¡Buen provecho!", "¡Que lo disfrutes!", "¡Excelente elección!", "¡Ñam ñam!", "¡Salud!"];
+          bubbleText.value = texts[Math.floor(Math.random() * texts.length)];
+          bubbleVisible.value = true;
+
+          bubbleTimer.value = setTimeout(() => {
+             bubbleVisible.value = false;
+          }, 4000);
+       }, 500);
     };
 
     // UI Helpers
@@ -784,7 +841,13 @@ createApp({
       formatCatName, scrollToCat, getIconForCategory,
 
       // Summary
-      userWeeklySummary, summaryHeaders
+      userWeeklySummary, summaryHeaders,
+
+      // Logo Animation
+      logoAnimating, bubbleVisible, bubbleText, triggerLogoAnimation,
+
+      // Generic Modal
+      msgModal, closeMsgModal, confirmMsgModal
     };
   }
 }).mount('#app');
