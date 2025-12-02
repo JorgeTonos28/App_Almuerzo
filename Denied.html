@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Acceso Denegado</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; background-color: #f9fafb; }
+    .fade-in { animation: fadeIn 0.5s ease-out forwards; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    .animate-fade-in-up { animation: fadeInUp 0.4s ease-out forwards; }
+    @keyframes fadeInUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+  </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
+
+  <script>
+    // Variables inyectadas por Apps Script
+    const userEmail = "<?= email ?>";
+    const userStatus = <?= status ? '"'+status+'"' : 'null' ?>;
+    const isInfotep = userEmail.endsWith('@infotep.gob.do');
+  </script>
+
+  <div id="app" class="bg-white rounded-2xl shadow-xl max-w-md w-full overflow-hidden fade-in border border-gray-100">
+     <!-- Header -->
+     <div class="bg-gradient-to-r from-blue-600 to-indigo-600 p-8 text-center text-white">
+        <div class="w-16 h-16 bg-white/20 backdrop-blur rounded-2xl flex items-center justify-center mx-auto mb-4 text-3xl shadow-lg">
+           <i class="fa-solid fa-lock"></i>
+        </div>
+        <h1 class="text-2xl font-bold">Almuerzo Pre-empacado</h1>
+     </div>
+
+     <div class="p-8 text-center space-y-4">
+        <!-- INVALID DOMAIN -->
+        <div id="view-domain" class="hidden">
+           <h2 class="text-xl font-bold text-gray-800">Acceso Restringido</h2>
+           <p class="text-gray-500 text-sm">Este es un servicio institucional. Estás intentando acceder con un correo no válido (<b><span id="display-email"></span></b>).</p>
+           <p class="text-gray-500 text-sm mt-2">Por favor, inicia sesión con tu cuenta corporativa <b>@infotep.gob.do</b>.</p>
+           <a href="https://accounts.google.com/AccountChooser" target="_blank" class="inline-block mt-4 text-blue-600 font-bold hover:underline">Cambiar Cuenta</a>
+        </div>
+
+        <!-- PENDING -->
+        <div id="view-pending" class="hidden">
+           <h2 class="text-xl font-bold text-gray-800">Solicitud en Proceso</h2>
+           <p class="text-gray-500 text-sm">Tu solicitud de acceso ha sido recibida y está siendo revisada por los administradores.</p>
+           <div class="mt-6 p-4 bg-yellow-50 rounded-xl border border-yellow-100 text-yellow-700 text-xs font-semibold flex items-center gap-3 text-left">
+              <i class="fa-solid fa-clock-rotate-left text-xl shrink-0"></i>
+              <span>Te notificaremos por correo cuando tu cuenta esté activa.</span>
+           </div>
+        </div>
+
+        <!-- INACTIVE -->
+        <div id="view-inactive" class="hidden">
+           <h2 class="text-xl font-bold text-gray-800">Cuenta Inactiva</h2>
+           <p class="text-gray-500 text-sm">Tu cuenta ha sido desactivada por un administrador.</p>
+           <p class="text-gray-500 text-sm">Si crees que es un error, contacta al departamento correspondiente.</p>
+        </div>
+
+        <!-- NEW USER -->
+        <div id="view-new" class="hidden">
+           <h2 class="text-xl font-bold text-gray-800">Acceso Requerido</h2>
+           <p class="text-gray-500 text-sm">No tienes acceso al sistema de pedidos.</p>
+           <p class="text-gray-500 text-sm">Si deseas utilizar el servicio, solicita tu alta completando el formulario.</p>
+
+           <button onclick="openModal()" class="mt-6 w-full py-3 bg-gray-900 hover:bg-black text-white rounded-xl font-bold shadow-lg transition-transform active:scale-95">
+              Solicitar Acceso
+           </button>
+        </div>
+     </div>
+
+     <div class="bg-gray-50 p-4 text-center border-t border-gray-100 flex flex-col items-center gap-2">
+        <div class="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Dirección de Innovación &copy; 2025</div>
+        <? if (signatureUrl) { ?>
+          <img src="<?!= signatureUrl ?>" alt="Sello" class="h-8 w-auto object-contain opacity-30 grayscale" />
+        <? } ?>
+     </div>
+  </div>
+
+  <!-- Modal -->
+  <div id="modal" class="fixed inset-0 z-50 bg-gray-900/60 backdrop-blur-sm hidden flex items-center justify-center p-4">
+     <div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden animate-fade-in-up">
+        <div class="px-6 py-4 border-b border-gray-100 bg-gray-50 flex justify-between items-center">
+           <h3 class="font-bold text-gray-800">Solicitud de Acceso</h3>
+           <button onclick="closeModal()" class="text-gray-400 hover:text-gray-600"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <div class="p-6 space-y-4">
+           <div>
+              <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Correo</label>
+              <input type="text" value="<?= email ?>" disabled class="w-full bg-gray-100 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-500">
+           </div>
+           <div>
+              <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Nombre Completo</label>
+              <input id="inpName" type="text" class="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Ej. Juan Pérez">
+           </div>
+           <div>
+              <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Código de Empleado</label>
+              <input id="inpCode" type="number" maxlength="4" class="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Ej. 5445">
+           </div>
+           <div>
+              <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Departamento</label>
+              <input id="inpDept" type="text" class="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Ej. Tecnología">
+           </div>
+        </div>
+        <div class="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3">
+           <button onclick="closeModal()" class="text-gray-500 text-sm font-bold hover:bg-gray-200 px-4 py-2 rounded-lg transition-colors">Cancelar</button>
+           <button id="btnSubmit" onclick="submitRequest()" class="bg-blue-600 text-white text-sm font-bold px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2">
+              Enviar
+           </button>
+        </div>
+     </div>
+  </div>
+
+  <script>
+    document.getElementById('display-email').textContent = userEmail;
+
+    if (!isInfotep) {
+       document.getElementById('view-domain').classList.remove('hidden');
+    } else if (userStatus === 'PENDIENTE') {
+       document.getElementById('view-pending').classList.remove('hidden');
+    } else if (userStatus === 'INACTIVO') {
+       document.getElementById('view-inactive').classList.remove('hidden');
+    } else {
+       document.getElementById('view-new').classList.remove('hidden');
+    }
+
+    function openModal() { document.getElementById('modal').classList.remove('hidden'); }
+    function closeModal() { document.getElementById('modal').classList.add('hidden'); }
+
+    function submitRequest() {
+       const name = document.getElementById('inpName').value.trim();
+       const dept = document.getElementById('inpDept').value.trim();
+       const code = document.getElementById('inpCode').value.trim();
+
+       if(!name || !dept || !code) return alert("Por favor completa todos los campos.");
+       if(!/^\d{4}$/.test(code)) return alert("El código debe tener exactamente 4 dígitos numéricos.");
+
+       const btn = document.getElementById('btnSubmit');
+       btn.disabled = true;
+       btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Enviando...';
+
+       google.script.run
+         .withSuccessHandler(() => {
+            closeModal();
+            document.getElementById('view-new').classList.add('hidden');
+            document.getElementById('view-pending').classList.remove('hidden');
+         })
+         .withFailureHandler(err => {
+            alert("Error: " + err.message);
+            btn.disabled = false;
+            btn.textContent = 'Enviar';
+         })
+         .apiRequestAccess({name, dept, code});
+    }
+  </script>
+</body>
+</html>
