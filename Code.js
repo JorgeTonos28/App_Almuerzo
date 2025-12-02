@@ -1,7 +1,7 @@
 /**
  * Code.gs - Backend V5 (Refactor & New Features)
  */
-const APP_VERSION = 'v5.13';
+const APP_VERSION = 'v6.01';
 
 // === RUTAS E INICIO ===
 
@@ -40,7 +40,13 @@ function include(filename) {
 
 function apiGetInitData(requestedDateStr, impersonateEmail) {
   try {
-    const activeUser = getUserInfo_();
+    // 1. Prefetch Data to reduce latency
+    const ss = SpreadsheetApp.getActive();
+    const menuData = ss.getSheetByName('Menu').getDataRange().getValues();
+    const ordersData = ss.getSheetByName('Pedidos').getDataRange().getValues();
+    const usersData = ss.getSheetByName('Usuarios').getDataRange().getValues();
+
+    const activeUser = getUserInfo_(null, usersData);
     if (!activeUser) throw new Error("Usuario no encontrado.");
 
     let targetUser = activeUser;
@@ -48,18 +54,18 @@ function apiGetInitData(requestedDateStr, impersonateEmail) {
 
     // Logic for Impersonation (ADMIN_DEP only)
     if (activeUser.rol === 'ADMIN_DEP') {
-       // Filter out self
-       deptUsers = getUsersByDept_(activeUser.departamentoId).filter(u => u.email.toLowerCase() !== activeUser.email.toLowerCase());
+       // Filter out self (using pre-fetched usersData optimization in helper if needed, but simple filter here)
+       deptUsers = getUsersByDept_(activeUser.departamentoId, usersData).filter(u => u.email.toLowerCase() !== activeUser.email.toLowerCase());
 
        if (impersonateEmail && impersonateEmail !== activeUser.email) {
-          const checkUser = getUserInfo_(impersonateEmail);
+          const checkUser = getUserInfo_(impersonateEmail, usersData);
           if (checkUser && checkUser.departamentoId === activeUser.departamentoId) {
              targetUser = checkUser;
           }
        }
     }
 
-    const availableDates = getAvailableMenuDates_(true);
+    const availableDates = getAvailableMenuDates_(true, menuData);
     if (availableDates.length === 0) {
       return { ok: true, empty: true, msg: "No hay menús disponibles." };
     }
@@ -69,18 +75,18 @@ function apiGetInitData(requestedDateStr, impersonateEmail) {
       targetDateStr = availableDates[0].value;
     }
 
-    const allMenus = getAllMenus_(availableDates);
-    const allOrders = getAllUserOrders_(targetUser.email, availableDates);
+    const allMenus = getAllMenus_(availableDates, menuData);
+    const allOrders = getAllUserOrders_(targetUser.email, availableDates, ordersData);
 
     const menu = allMenus[targetDateStr] || {};
     const existingOrder = allOrders[targetDateStr] || null;
 
     let adminSummary = null;
     if (activeUser.rol === 'ADMIN_GEN' || activeUser.rol === 'ADMIN_DEP') {
-      adminSummary = getDepartmentStats_(targetDateStr, (activeUser.rol === 'ADMIN_GEN' ? null : activeUser.departamentoId));
+      adminSummary = getDepartmentStats_(targetDateStr, (activeUser.rol === 'ADMIN_GEN' ? null : activeUser.departamentoId), ordersData);
     }
 
-    const prefs = getUserPrefs_(targetUser.email);
+    const prefs = getUserPrefs_(targetUser.email, usersData);
 
     // Get Banner Text from Config
     const bannerText = getConfigValue_('PLAN_WEEK_TEXT') || 'Planifica tu semana';
@@ -289,21 +295,10 @@ function scheduledDailyClose() {
   const nextBusinessDay = getNextBusinessDay_(now);
   if (!nextBusinessDay) return;
 
-  const targetDateStr = formatDate_(nextBusinessDay);
-
-  backupOrdersToDrive_(targetDateStr);
-  sendDailyAdminSummary_(targetDateStr);
-  checkMenuIntegrity_();
-}
-
-function scheduledDepartmentReports() {
-  const now = new Date();
-  const nextBusinessDay = getNextBusinessDay_(now);
-  if (!nextBusinessDay) return;
-
   const dateStr = formatDate_(nextBusinessDay);
-  const orders = getOrdersByDateDetailed_(dateStr);
 
+  // 1. Get Orders and Group by Dept
+  const orders = getOrdersByDateDetailed_(dateStr);
   const byDept = {};
   orders.forEach(o => {
     const deptId = o.departamentoId || 'Sin Depto';
@@ -311,33 +306,84 @@ function scheduledDepartmentReports() {
     byDept[deptId].push(o);
   });
 
+  // 2. Prepare Recipients Logic
   const rawConfig = getConfigValue_('RESPONSIBLES_EMAILS_JSON');
-  let recipients = [];
-  try { recipients = JSON.parse(rawConfig); } catch(e) {}
-  if (!Array.isArray(recipients)) recipients = [];
+  let configRecipients = null;
+  try { configRecipients = JSON.parse(rawConfig); } catch(e) {}
 
-  const toList = recipients.filter(r => r.type === 'TO').map(r => r.email).join(',');
-  const ccList = recipients.filter(r => r.type === 'CC').map(r => r.email).join(',');
+  const getRecipientsForDept = (deptId) => {
+      let list = [];
+      if (Array.isArray(configRecipients)) {
+          list = configRecipients; // Global list
+      } else if (configRecipients && typeof configRecipients === 'object') {
+          // Map: try specific dept
+          if (configRecipients[deptId] && Array.isArray(configRecipients[deptId])) {
+             list = configRecipients[deptId];
+          }
+      }
 
-  if (!toList && !ccList) return;
+      return {
+          to: list.filter(r => r.type === 'TO').map(r => r.email).join(','),
+          cc: list.filter(r => r.type === 'CC').map(r => r.email).join(',')
+      };
+  };
 
   const deptMap = getDepartmentMap_();
+  const backupFolder = getDailyBackupFolder_(dateStr);
 
+  // 3. Process each Department
   Object.keys(byDept).forEach(deptId => {
     const deptName = deptMap[deptId] || deptId;
     const deptOrders = byDept[deptId];
 
-    const pdfBlob = createPdfReport_(deptOrders, deptName, dateStr);
-    savePdfToBackup_(pdfBlob, dateStr);
+    // Resolve recipients for this department
+    const { to: toList, cc: ccList } = getRecipientsForDept(deptId);
 
-    sendEmail_(toList, `Reporte Almuerzo ${deptName} - ${dateStr}`,
-      `<h3>Pedidos para ${formatDisplayDate_(dateStr)} - ${deptName}</h3>` +
-      `<p>Total platos: ${deptOrders.length}</p>` +
-      `<p>Se adjunta el reporte detallado en PDF.</p>`,
-      ccList,
-      [pdfBlob]
-    );
+    // Format Filename Date: dd-MM-yyyy
+    const d = new Date(dateStr + 'T12:00:00');
+    const fDate = Utilities.formatDate(d, Session.getScriptTimeZone(), 'dd-MM-yyyy');
+    const fileName = `[${deptName} - ${fDate}]`;
+
+    try {
+      // Create Report SS from Template
+      const tempSS = createReportFromTemplate_(deptName, dateStr, deptOrders);
+
+      // Export PDF -> Backup
+      const pdfBlob = exportSheetToPdfBlob_(tempSS);
+      pdfBlob.setName(`${fileName}.pdf`);
+      backupFolder.createFile(pdfBlob);
+
+      // Export Excel -> Email
+      if (toList || ccList) {
+        const excelBlob = exportSheetToExcelBlob_(tempSS);
+        excelBlob.setName(`${fileName}.xlsx`);
+
+        sendEmail_(toList, `Reporte Almuerzo ${deptName} - ${dateStr}`,
+          `<h3>Pedidos para ${formatDisplayDate_(dateStr)} - ${deptName}</h3>` +
+          `<p>Total platos: ${deptOrders.length}</p>` +
+          `<p>Se adjunta el reporte en Excel.</p>`,
+          ccList,
+          [excelBlob]
+        );
+      } else {
+         console.warn(`No recipients found for department ${deptName} (${deptId}). Report saved to backup only.`);
+      }
+
+      // Cleanup
+      DriveApp.getFileById(tempSS.getId()).setTrashed(true);
+
+    } catch(e) {
+      console.error(`Error processing report for ${deptName}: ${e.message}`);
+    }
   });
+
+  // 4. Maintenance
+  checkMenuIntegrity_();
+}
+
+function scheduledDepartmentReports() {
+  // Deprecated. Logic moved to scheduledDailyClose.
+  console.log("Trigger scheduledDepartmentReports is deprecated.");
 }
 
 // === ADMIN API ===
@@ -776,10 +822,9 @@ function apiDeleteHoliday(dateStr) {
 
 // === UTILS ===
 
-function getUserInfo_(targetEmail) {
+function getUserInfo_(targetEmail, usersData) {
   const email = targetEmail ? targetEmail.toLowerCase() : Session.getActiveUser().getEmail().toLowerCase();
-  const sh = SpreadsheetApp.getActive().getSheetByName('Usuarios');
-  const data = sh.getDataRange().getValues();
+  const data = usersData || SpreadsheetApp.getActive().getSheetByName('Usuarios').getDataRange().getValues();
   const deptMap = getDepartmentMap_();
 
   for (let i = 1; i < data.length; i++) {
@@ -818,9 +863,8 @@ function getDepartmentsList_() {
    return data.slice(1).map(r => ({ id: r[0], nombre: r[1], admins: r[2], estado: r[3] }));
 }
 
-function getUsersByDept_(deptId) {
-  const sh = SpreadsheetApp.getActive().getSheetByName('Usuarios');
-  const data = sh.getDataRange().getValues();
+function getUsersByDept_(deptId, usersData) {
+  const data = usersData || SpreadsheetApp.getActive().getSheetByName('Usuarios').getDataRange().getValues();
   const users = [];
   for (let i = 1; i < data.length; i++) {
     if (data[i][2] === deptId && data[i][4] === 'ACTIVO') {
@@ -835,7 +879,10 @@ function isDateOpenForOrdering_(targetDateStr, holidaysSet) {
   const now = new Date();
   const targetDate = new Date(targetDateStr + 'T12:00:00');
 
-  if (targetDate <= now) return false;
+  // Past dates are closed
+  const zeroNow = new Date(now); zeroNow.setHours(0,0,0,0);
+  const zeroTarget = new Date(targetDate); zeroTarget.setHours(0,0,0,0);
+  if (zeroTarget <= zeroNow) return false;
 
   const day = targetDate.getDay();
   if (day === 0 || day === 6) return false;
@@ -860,8 +907,12 @@ function isDateOpenForOrdering_(targetDateStr, holidaysSet) {
        m = parseInt(parts[1], 10);
     }
 
-    // Subtract minutes
-    const limit = new Date();
+    // Fallback if config is invalid (e.g. "[]")
+    if (isNaN(h) || isNaN(m)) { h = 15; m = 0; }
+    if (isNaN(minutesBefore)) minutesBefore = 30;
+
+    // Construct limit time using the SAME day as 'now'
+    const limit = new Date(now);
     limit.setHours(h, m, 0, 0);
     limit.setMinutes(limit.getMinutes() - minutesBefore);
 
@@ -869,7 +920,6 @@ function isDateOpenForOrdering_(targetDateStr, holidaysSet) {
   }
 
   // If today is past the cutoff day
-  const zeroNow = new Date(now); zeroNow.setHours(0,0,0,0);
   const zeroPrev = new Date(prevBizDay); zeroPrev.setHours(0,0,0,0);
   if (zeroNow > zeroPrev) return false;
 
@@ -993,17 +1043,24 @@ function getSignatureDataUrl_() {
   } catch (e) { return ''; }
 }
 
-function getAvailableMenuDates_(fetchAll) {
-  const ss = SpreadsheetApp.getActive();
-  const menuSh = ss.getSheetByName('Menu');
-  const data = menuSh.getRange(2, 1, menuSh.getLastRow()-1, 2).getValues();
+function getAvailableMenuDates_(fetchAll, menuData) {
+  const data = menuData || SpreadsheetApp.getActive().getSheetByName('Menu').getDataRange().getValues();
+  // data[0] is header if raw fetch, but if logic assumes slicing elsewhere...
+  // The original logic: data = menuSh.getRange(2, 1, ..., 2).getValues(); (No headers)
+  // But generic 'getDataRange' includes headers.
+  // We should loop from 1.
+
   const now = new Date();
   const todayStr = formatDate_(now);
   const datesSet = new Set();
-  data.forEach(r => {
+
+  for(let i=1; i<data.length; i++) {
+    const r = data[i];
+    if(!r[1]) continue;
     const dStr = formatDate_(new Date(r[1]));
     if (dStr >= todayStr) datesSet.add(dStr);
-  });
+  }
+
   const sorted = Array.from(datesSet).sort();
   const holidays = getHolidaysSet_();
   const valid = [];
@@ -1015,9 +1072,8 @@ function getAvailableMenuDates_(fetchAll) {
   return valid;
 }
 
-function getAllMenus_(availableDates) {
-  const sh = SpreadsheetApp.getActive().getSheetByName('Menu');
-  const data = sh.getDataRange().getValues();
+function getAllMenus_(availableDates, menuData) {
+  const data = menuData || SpreadsheetApp.getActive().getSheetByName('Menu').getDataRange().getValues();
   const menuMap = {};
   const validDates = new Set(availableDates.map(d => d.value));
   availableDates.forEach(d => { menuMap[d.value] = {}; });
@@ -1033,9 +1089,8 @@ function getAllMenus_(availableDates) {
   return menuMap;
 }
 
-function getAllUserOrders_(email, availableDates) {
-  const sh = SpreadsheetApp.getActive().getSheetByName('Pedidos');
-  const data = sh.getDataRange().getValues();
+function getAllUserOrders_(email, availableDates, ordersData) {
+  const data = ordersData || SpreadsheetApp.getActive().getSheetByName('Pedidos').getDataRange().getValues();
   const ordersMap = {};
   const validDates = new Set(availableDates.map(d => d.value));
   for (let i = 1; i < data.length; i++) {
@@ -1047,9 +1102,8 @@ function getAllUserOrders_(email, availableDates) {
   return ordersMap;
 }
 
-function getUserPrefs_(email) {
-  const sh = SpreadsheetApp.getActive().getSheetByName('Usuarios');
-  const data = sh.getDataRange().getValues();
+function getUserPrefs_(email, usersData) {
+  const data = usersData || SpreadsheetApp.getActive().getSheetByName('Usuarios').getDataRange().getValues();
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][0]).toLowerCase() === email) {
       return JSON.parse(data[i][5] || '{}');
@@ -1058,9 +1112,9 @@ function getUserPrefs_(email) {
   return {};
 }
 
-function getDepartmentStats_(dateStr, deptIdFilter) {
+function getDepartmentStats_(dateStr, deptIdFilter, ordersData) {
   const departmentStats = { total: 0, byUser: [] };
-  const orders = getOrdersByDate_(dateStr);
+  const orders = getOrdersByDate_(dateStr, ordersData);
   orders.forEach(o => {
     // Check ID
     if (!deptIdFilter || o.departamentoId === deptIdFilter) {
@@ -1071,9 +1125,8 @@ function getDepartmentStats_(dateStr, deptIdFilter) {
   return departmentStats;
 }
 
-function getOrdersByDate_(dateStr) {
-  const sh = SpreadsheetApp.getActive().getSheetByName('Pedidos');
-  const data = sh.getDataRange().getValues();
+function getOrdersByDate_(dateStr, ordersData) {
+  const data = ordersData || SpreadsheetApp.getActive().getSheetByName('Pedidos').getDataRange().getValues();
   const deptMap = getDepartmentMap_();
   const list = [];
   for (let i = 1; i < data.length; i++) {
@@ -1200,82 +1253,166 @@ function getOrdersByDateDetailed_(dateStr) {
   const sh = SpreadsheetApp.getActive().getSheetByName('Pedidos');
   const data = sh.getDataRange().getValues();
   const deptMap = getDepartmentMap_();
+  const codeMap = getUserCodeMap_();
   const list = [];
   for (let i = 1; i < data.length; i++) {
     const rowDate = formatDate_(new Date(data[i][2]));
     if (rowDate === dateStr && data[i][8] !== 'CANCELADO') {
       let detail = {};
       try { detail = JSON.parse(data[i][7]); } catch(e){}
+      const email = String(data[i][3]).toLowerCase();
       list.push({
         nombre: data[i][4],
         departamentoId: data[i][5],
         departamento: deptMap[data[i][5]] || data[i][5],
         resumen: data[i][6],
-        detail: detail
+        detail: detail,
+        codigo: codeMap[email] || ''
       });
     }
   }
   return list;
 }
 
-function createPdfReport_(orders, deptName, dateStr) {
-  const cats = ['Arroces', 'Granos', 'Carnes', 'Ensaladas', 'Viveres', 'Vegetariana', 'Caldo', 'Opcion_Rapida'];
-
-  let rows = '';
-  orders.forEach((o, idx) => {
-     let cells = `<td>${idx+1}</td><td>${o.nombre}</td>`;
-     const d = o.detail;
-
-     cats.forEach(c => {
-        let items = [];
-        if (d && d.categorias && d.items) {
-           d.categorias.forEach((cat, i) => {
-              if (cat === c) items.push(d.items[i]);
-           });
-        }
-        cells += `<td>${items.join(', ')}</td>`;
-     });
-     rows += `<tr>${cells}</tr>`;
-  });
-
-  const html = `
-    <html>
-    <head>
-      <style>
-        body { font-family: sans-serif; font-size: 10px; }
-        table { width: 100%; border-collapse: collapse; }
-        th, td { border: 1px solid #ccc; padding: 4px; text-align: left; }
-        th { background-color: #f0f0f0; font-weight: bold; }
-        .header { text-align: center; margin-bottom: 20px; font-weight: bold; font-size: 14px; }
-      </style>
-    </head>
-    <body>
-      <div class="header">INFOTEP | ${deptName} | ${dateStr}</div>
-      <table>
-        <thead>
-          <tr>
-            <th style="width:30px">#</th>
-            <th>Colaborador</th>
-            ${cats.map(c => `<th>${c.replace(/_/g, ' ')}</th>`).join('')}
-          </tr>
-        </thead>
-        <tbody>
-          ${rows}
-        </tbody>
-      </table>
-    </body>
-    </html>
-  `;
-
-  const blob = Utilities.newBlob(html, MimeType.HTML).setName(`Reporte_${deptName}_${dateStr}.html`);
-  return blob.getAs(MimeType.PDF).setName(`Reporte_${deptName}_${dateStr}.pdf`);
+function getUserCodeMap_() {
+   const sh = SpreadsheetApp.getActive().getSheetByName('Usuarios');
+   const data = sh.getDataRange().getValues();
+   const map = {};
+   for(let i=1; i<data.length; i++) {
+      const email = String(data[i][0]).toLowerCase();
+      const code = data[i][6]; // Index 6 is Code
+      if(code) map[email] = String(code);
+   }
+   return map;
 }
 
-function savePdfToBackup_(pdfBlob, dateStr) {
-  try {
-     const folder = getDailyBackupFolder_(dateStr);
-     folder.createFile(pdfBlob);
-  } catch(e) { console.error("Error saving PDF backup: " + e.message); }
+function createReportFromTemplate_(deptName, dateStr, orders) {
+  const templateId = getConfigValue_('DAILY_REPORT_MODEL_ID');
+  if (!templateId) throw new Error("Falta configurar DAILY_REPORT_MODEL_ID");
+
+  // Copy Template (Handling .xlsx if needed by converting)
+  const templateFile = DriveApp.getFileById(templateId);
+  const newFile = templateFile.makeCopy(`Temp_Report_${deptName}_${dateStr}`);
+
+  // If original is .xlsx, makeCopy keeps it as .xlsx (Blob) or Google Sheet depending on settings?
+  // DriveApp.makeCopy of non-native file creates non-native copy.
+  // We need to convert it.
+
+  let ssId = newFile.getId();
+
+  // Check if we need to convert (if mimeType is not Google Spreadsheet)
+  if (newFile.getMimeType() !== MimeType.GOOGLE_SHEETS) {
+     const blob = newFile.getBlob();
+     const config = {
+        title: `Temp_Report_${deptName}_${dateStr}`,
+        parents: [{id: 'root'}], // Temporary location
+        mimeType: MimeType.GOOGLE_SHEETS
+     };
+     try {
+       const resource = Drive.Files.create(config, blob, {convert: true});
+       ssId = resource.id;
+       newFile.setTrashed(true); // Delete the non-converted copy
+     } catch(e) {
+       newFile.setTrashed(true);
+       throw new Error("Failed to convert Excel template: " + e.message);
+     }
+  }
+
+  const ss = SpreadsheetApp.openById(ssId);
+  const sh = ss.getSheets()[0]; // Assume first sheet
+
+  // 1. Set Dept Name (B3:M4)
+  sh.getRange("B3:M4").merge().setValue(deptName.toUpperCase())
+    .setHorizontalAlignment("center").setVerticalAlignment("middle");
+
+  // 2. Set Date (B5:M5) -> "PEDIDO ALMUERZO : 03/12/2025"
+  const d = new Date(dateStr + 'T12:00:00');
+  const fmtDate = Utilities.formatDate(d, Session.getScriptTimeZone(), 'dd/MM/yyyy');
+  sh.getRange("B5:M5").merge().setValue(`PEDIDO ALMUERZO : ${fmtDate}`)
+    .setHorizontalAlignment("center").setVerticalAlignment("middle")
+    .setFontWeight("bold");
+
+  // 3. Set Headers (B7:M7)
+  const headers = ['NO.', 'NOMBRE EMPLEADO', 'CÓDIGO', 'DEPARTAMENTO', 'ARROCES', 'GRANOS', 'CARNES', 'VIVERES', 'ESPECIALIDADES', 'ENSALADAS', 'CALDO', 'OPCION RAPIDA'];
+  sh.getRange("B7:M7").setValues([headers])
+    .setFontWeight("bold").setBorder(true, true, true, true, true, true);
+
+  // 4. Populate Data
+  // Mapping categories to columns indices (relative to B, so 0-based index in values array)
+  // Headers: No(0), Nombre(1), Cod(2), Dept(3), Arroz(4), Granos(5), Carnes(6), Viveres(7), Esp(8), Ens(9), Caldo(10), OpRap(11)
+
+  const catMap = {
+     'Arroces': 4,
+     'Granos': 5,
+     'Carnes': 6,
+     'Viveres': 7,
+     'Vegetariana': 8, // Especialidades
+     'Ensaladas': 9,
+     'Caldo': 10,
+     'Opcion_Rapida': 11
+  };
+
+  const rows = [];
+  orders.forEach((o, i) => {
+     // Get user code if available (need to fetch from user object or pass it)
+     // orders object from getOrdersByDateDetailed_ doesn't have code.
+     // We might need to fetch it or ignore it.
+     // Let's try to get it from cache or efficient lookup if possible.
+     // For now, empty or fetch? fetching one by one is slow.
+     // Optimization: getOrdersByDateDetailed_ could include code.
+
+     // Let's assume we want to fix getOrdersByDateDetailed_ to include Code.
+     // But for now, let's look at the current row structure.
+
+     const row = new Array(12).fill('');
+     row[0] = i + 1;
+     row[1] = o.nombre;
+     row[2] = o.codigo || ''; // Need to ensure 'codigo' is passed
+     row[3] = o.departamento;
+
+     const d = o.detail;
+     if (d && d.categorias && d.items) {
+        d.categorias.forEach((cat, idx) => {
+           const colIdx = catMap[cat];
+           if (colIdx !== undefined) {
+              const item = d.items[idx];
+              row[colIdx] = row[colIdx] ? row[colIdx] + ', ' + item : item;
+           }
+        });
+     }
+     rows.push(row);
+  });
+
+  if (rows.length > 0) {
+     const range = sh.getRange(8, 2, rows.length, 12); // Start B8
+     range.setValues(rows);
+     range.setBorder(true, true, true, true, true, true);
+     range.setHorizontalAlignment("center");
+     range.setVerticalAlignment("middle");
+     range.setWrapStrategy(SpreadsheetApp.WrapStrategy.WRAP);
+  }
+
+  sh.setColumnWidth(2, 40); // Fix width for 'NO.' column
+  sh.autoResizeColumns(3, 11); // Auto-resize rest (C-M)
+
+  SpreadsheetApp.flush(); // FORCE SAVE before export
+  return ss;
+}
+
+function exportSheetToPdfBlob_(ss) {
+  const file = DriveApp.getFileById(ss.getId());
+  return file.getAs(MimeType.PDF);
+}
+
+function exportSheetToExcelBlob_(ss) {
+  const url = `https://docs.google.com/spreadsheets/d/${ss.getId()}/export?format=xlsx`;
+  const token = ScriptApp.getOAuthToken();
+  const response = UrlFetchApp.fetch(url, {
+    headers: {
+      'Authorization': 'Bearer ' + token
+    }
+  });
+  return response.getBlob();
 }
 
 function getDailyBackupFolder_(dateStr) {

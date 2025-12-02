@@ -944,6 +944,22 @@ createApp({
       return 'fa-solid ' + (map[cat] || 'fa-circle');
     };
 
+    const formatConfigValue = (key, value) => {
+       if (!value) return '';
+       if (key.includes('HORA')) {
+          if (value.match(/^\d{1,2}:\d{2}$/)) {
+             const [h, m] = value.split(':');
+             const date = new Date();
+             date.setHours(h, m);
+             return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          }
+       }
+       if (key.includes('MINUTOS')) {
+          return value + ' min';
+       }
+       return value;
+    };
+
     // Inicialización
     onMounted(() => {
       loadData(); // Carga inicial sin fecha (el servidor decide la primera disponible)
@@ -990,7 +1006,7 @@ createApp({
       filteredUsers, filteredOrders,
 
       // UI Utils
-      formatCatName, scrollToCat, getIconForCategory,
+      formatCatName, scrollToCat, getIconForCategory, formatConfigValue,
 
       // Summary
       userWeeklySummary, summaryHeaders,
