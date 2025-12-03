@@ -1662,3 +1662,30 @@ function getDailyBackupFolder_(dateStr) {
 
   return mFolder;
 }
+
+/**
+ * Ejecuta esto una sola vez para activar la automatización.
+ */
+function installTriggers() {
+  // 1. Borrar triggers existentes para evitar duplicados
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(t => ScriptApp.deleteTrigger(t));
+  
+  // 2. Crear trigger para Recordatorios (Ej: 1:30 PM)
+  ScriptApp.newTrigger('scheduledSendReminders')
+    .timeBased()
+    .everyDays(1)
+    .atHour(13) // 13 = 1 PM
+    .nearMinute(30)
+    .create();
+    
+  // 3. Crear trigger para Cierre y Reportes (Ej: 3:00 PM)
+  // Asegúrate de que coincida con tu HORA_ENVIO en la hoja Config
+  ScriptApp.newTrigger('scheduledDailyClose')
+    .timeBased()
+    .everyDays(1)
+    .atHour(15) // 15 = 3 PM
+    .create();
+    
+  Logger.log("Activadores instalados correctamente.");
+}
