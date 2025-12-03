@@ -161,7 +161,7 @@ function apiRequestAccess(data) {
            `,
            cta: { text: 'Ir al Panel de Administración', url: ScriptApp.getService().getUrl() }
         });
-        sendEmail_(admins, "Nueva Solicitud de Acceso", html);
+        sendEmail_(admins, "Almuerzo Pre-empacado | Nueva Solicitud de Acceso", html);
      }
 
      return { ok: true };
@@ -318,7 +318,7 @@ function scheduledSendReminders() {
          footerNote: 'Si ya no deseas recibir estos recordatorios, puedes desactivarlos en la configuración de la App dando clic en el botón de notificaciones (🔔).'
       });
 
-      sendEmail_(email, "Recordatorio de Almuerzo", html);
+      sendEmail_(email, "Almuerzo Pre-empacado | Recordatorio de pedido", html);
     }
   });
 }
@@ -405,7 +405,7 @@ function scheduledDailyClose() {
            footerNote: 'Este reporte se genera automáticamente al cierre de pedidos.'
         });
 
-        sendEmail_(toList, `Reporte Almuerzo ${deptName} - ${dateStr}`, html, ccList, [excelBlob]);
+        sendEmail_(toList, `Almuerzo Pre-empacado | Reporte Almuerzo ${deptName} - ${dateStr}`, html, ccList, [excelBlob]);
       } else {
          console.warn(`No recipients found for department ${deptName} (${deptId}). Report saved to backup only.`);
       }
@@ -678,7 +678,7 @@ function apiAdminSaveUser(userData) {
         `,
         cta: { text: 'Ingresar a la App', url: ScriptApp.getService().getUrl() }
      });
-     sendEmail_(userData.email, "Acceso Aprobado - Almuerzo", html);
+     sendEmail_(userData.email, "Almuerzo Pre-empacado | Acceso Aprobado", html);
   }
 
   return { ok: true };
@@ -1339,7 +1339,7 @@ function getEmailTemplate_(data) {
 
           <div class="footer">
              <p style="margin-bottom: 8px; font-weight: 600;">${appName}</p>
-             <p>&copy; ${new Date().getFullYear()} Dirección de Innovación. Todos los derechos reservados.</p>
+             <p>&copy; ${new Date().getFullYear()} Dirección de Innovación.</p>
              ${data.footerNote ? `<p style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #f3f4f6;">${data.footerNote}</p>` : ''}
           </div>
         </div>
@@ -1428,7 +1428,7 @@ function checkMenuIntegrity_() {
           `,
           cta: { text: 'Revisar Menú', url: ScriptApp.getService().getUrl() }
        });
-       sendEmail_(admins, "Alerta: Integridad de Menú", html);
+       sendEmail_(admins, "Almuerzo Pre-empacado | Alerta: Integridad de Menú", html);
     }
   }
 }
@@ -1453,7 +1453,7 @@ function sendDailyAdminSummary_(dateStr) {
         `,
         cta: { text: 'Ver Panel Administrativo', url: ScriptApp.getService().getUrl() }
      });
-    sendEmail_(admins, `Resumen Pedidos ${dateStr}`, html);
+    sendEmail_(admins, `Almuerzo Pre-empacado | Resumen Pedidos ${dateStr}`, html);
   }
 }
 
