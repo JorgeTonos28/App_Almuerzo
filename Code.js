@@ -1,7 +1,7 @@
 /**
  * Code.gs - Backend V5 (Refactor & New Features)
  */
-const APP_VERSION = 'v6.02';
+const APP_VERSION = 'v6.03';
 
 // === RUTAS E INICIO ===
 
@@ -148,11 +148,20 @@ function apiRequestAccess(data) {
      // Notify Admins
      const admins = getConfigValue_('ADMIN_EMAILS');
      if (admins) {
-        sendEmail_(admins, "Nueva Solicitud de Acceso",
-           `El usuario <b>${data.name}</b> (${email}) ha solicitado acceso al sistema de almuerzo.<br>` +
-           `Departamento: ${data.dept}<br><br>` +
-           `Ingresa al Panel de Administración para aprobarlo.`
-        );
+        const html = getEmailTemplate_({
+           title: 'Nueva Solicitud de Acceso',
+           body: `
+             <p>El usuario <strong>${data.name}</strong> ha solicitado acceso al sistema de almuerzo.</p>
+             <div style="background-color: #f3f4f6; padding: 16px; border-radius: 8px; margin: 16px 0;">
+                <p style="margin: 4px 0;"><strong>Correo:</strong> ${email}</p>
+                <p style="margin: 4px 0;"><strong>Departamento:</strong> ${data.dept}</p>
+                <p style="margin: 4px 0;"><strong>Código:</strong> ${data.code}</p>
+             </div>
+             <p>Ingresa al Panel de Administración para verificar y aprobar esta solicitud.</p>
+           `,
+           cta: { text: 'Ir al Panel de Administración', url: ScriptApp.getService().getUrl() }
+        });
+        sendEmail_(admins, "Nueva Solicitud de Acceso", html);
      }
 
      return { ok: true };
@@ -280,12 +289,36 @@ function scheduledSendReminders() {
       // Calculate closing time for display
       const envio = getConfigValue_('HORA_ENVIO') || '15:00';
       const mins = parseInt(getConfigValue_('MINUTOS_PREV_CIERRE') || '30', 10);
-      // Rough calc for display
-      sendEmail_(email, "Recordatorio de Almuerzo",
-        `Hola ${row[1]},<br><br>Aún no has realizado tu pedido para el <b>${formatDisplayDate_(dateStr)}</b>.<br>` +
-        `Recuerda pedir antes del cierre.<br><br>` +
-        `<a href="${ScriptApp.getService().getUrl()}">Ir a la App</a>`
-      );
+
+      // Calculate exact closing time for display
+      let h = 15, m = 0;
+      if (envio instanceof Date) { h = envio.getHours(); m = envio.getMinutes(); }
+      else { const p = String(envio).split(':'); h = parseInt(p[0]||15); m = parseInt(p[1]||0); }
+
+      const limitDate = new Date();
+      limitDate.setHours(h, m, 0, 0);
+      limitDate.setMinutes(limitDate.getMinutes() - mins);
+      const limitStr = Utilities.formatDate(limitDate, Session.getScriptTimeZone(), 'hh:mm a');
+
+      const appUrl = ScriptApp.getService().getUrl();
+      const userName = row[1] ? row[1].split(' ')[0] : 'Colaborador'; // First name
+
+      const html = getEmailTemplate_({
+         title: 'Recordatorio de Almuerzo',
+         body: `
+           <p>Hola <strong>${userName}</strong>,</p>
+           <p>¿No pedirás nada? Hasta ahora no hemos recibido tu selección de almuerzo para el día de mañana (<b>${formatDisplayDate_(dateStr)}</b>).</p>
+           <p>Si comerás aquí, por favor revisa la hoja de solicitudes.</p>
+           <p style="background-color: #fff7ed; padding: 12px; border-left: 4px solid #f97316; margin: 16px 0; font-size: 14px; color: #9a3412;">
+             ⚠️ Tienes hasta las <strong>${limitStr}</strong> de hoy para hacer tu pedido.
+           </p>
+           <p style="font-size: 12px; color: #6b7280; margin-top: 24px;">(Este es un mensaje automático, no es necesario responder).</p>
+         `,
+         cta: { text: 'Abrir App de Almuerzo', url: appUrl },
+         footerNote: 'Si ya no deseas recibir estos recordatorios, puedes desactivarlos en la configuración de la App dando clic en el botón de notificaciones (🔔).'
+      });
+
+      sendEmail_(email, "Recordatorio de Almuerzo", html);
     }
   });
 }
@@ -358,13 +391,21 @@ function scheduledDailyClose() {
         const excelBlob = exportSheetToExcelBlob_(tempSS);
         excelBlob.setName(`${fileName}.xlsx`);
 
-        sendEmail_(toList, `Reporte Almuerzo ${deptName} - ${dateStr}`,
-          `<h3>Pedidos para ${formatDisplayDate_(dateStr)} - ${deptName}</h3>` +
-          `<p>Total platos: ${deptOrders.length}</p>` +
-          `<p>Se adjunta el reporte en Excel.</p>`,
-          ccList,
-          [excelBlob]
-        );
+        const formattedDate = Utilities.formatDate(new Date(dateStr + 'T12:00:00'), Session.getScriptTimeZone(), 'dd/MM/yyyy');
+
+        const html = getEmailTemplate_({
+           title: `Reporte ${deptName}`,
+           subtitle: `Pedidos para el ${formattedDate}`,
+           body: `
+             <p>Buenas tardes estimados,</p>
+             <p>Hay <strong>${deptOrders.length}</strong> pedidos registrados del departamento de <strong>${deptName}</strong> para el día <strong>${formattedDate}</strong>.</p>
+             <p>Favor revisar el archivo Excel adjunto para más detalles sobre los platos solicitados.</p>
+             <p>Cualquier duda, estamos a la orden.</p>
+           `,
+           footerNote: 'Este reporte se genera automáticamente al cierre de pedidos.'
+        });
+
+        sendEmail_(toList, `Reporte Almuerzo ${deptName} - ${dateStr}`, html, ccList, [excelBlob]);
       } else {
          console.warn(`No recipients found for department ${deptName} (${deptId}). Report saved to backup only.`);
       }
@@ -377,8 +418,9 @@ function scheduledDailyClose() {
     }
   });
 
-  // 4. Maintenance
+  // 4. Maintenance & Admin Summary
   checkMenuIntegrity_();
+  sendDailyAdminSummary_(dateStr);
 }
 
 function scheduledDepartmentReports() {
@@ -427,6 +469,7 @@ function apiGetAdminData() {
 
     // Config & Holidays (Admin Gen only)
     if (user.rol === 'ADMIN_GEN') {
+       ensureConfigKey_('LOGO_ID', '', 'ID del archivo de imagen del Logo en Drive');
        data.config = getConfigValue_('ALL');
        for (const k in data.config) {
           const val = data.config[k];
@@ -625,12 +668,17 @@ function apiAdminSaveUser(userData) {
   // Send Notification if Activated
   if (userData.estado === 'ACTIVO' && prevStatus !== 'ACTIVO') {
      SpreadsheetApp.flush();
-     sendEmail_(userData.email, "Acceso Aprobado - Almuerzo",
-        `Hola ${userData.nombre},<br><br>` +
-        `Tu cuenta ha sido activada exitosamente.<br>` +
-        `Ya puedes ingresar al sistema para realizar tus pedidos.<br><br>` +
-        `<a href="${ScriptApp.getService().getUrl()}">Ingresar a la App</a>`
-     );
+     const html = getEmailTemplate_({
+        title: '¡Bienvenido!',
+        subtitle: 'Acceso Aprobado',
+        body: `
+          <p>Hola <strong>${userData.nombre}</strong>,</p>
+          <p>Tu cuenta ha sido activada exitosamente.</p>
+          <p>Ya puedes ingresar al sistema para realizar tus pedidos de almuerzo.</p>
+        `,
+        cta: { text: 'Ingresar a la App', url: ScriptApp.getService().getUrl() }
+     });
+     sendEmail_(userData.email, "Acceso Aprobado - Almuerzo", html);
   }
 
   return { ok: true };
@@ -1205,13 +1253,13 @@ function sendEmail_(to, subject, htmlBody, cc, attachments) {
 
   const finalSubject = testMode ? `[TEST] ${subject}` : subject;
 
-  const sigUrl = getSignatureDataUrl_();
-  const signatureHtml = sigUrl ? `<br><br><img src="${sigUrl}" style="max-height:100px;">` : '';
+  // Signature is now handled by the template system (getEmailTemplate_)
+  // We strictly send what we receive, assuming it's already formatted.
 
   const options = {
     to: recipient,
     subject: finalSubject,
-    htmlBody: htmlBody + signatureHtml,
+    htmlBody: htmlBody,
     name: senderName
   };
 
@@ -1223,6 +1271,128 @@ function sendEmail_(to, subject, htmlBody, cc, attachments) {
     MailApp.sendEmail(options);
   } catch(e) {
     console.error("Email error: " + e.message);
+  }
+}
+
+// === EMAIL SYSTEM ===
+
+function getEmailTemplate_(data) {
+  // data: { title, subtitle, body, cta: {text, url}, footerNote }
+
+  const logoUrl = getLogoDataUrl_() || '';
+  // If no logo, we can use a text header or just empty.
+  // The user requested a text based header AND a logo on top.
+
+  const appName = getConfigValue_('APP_TITLE') || 'Solicitud Almuerzo';
+
+  const primaryColor = '#2563eb'; // blue-600
+  const grayBg = '#f9fafb';
+  const white = '#ffffff';
+  const textDark = '#111827';
+  const textGray = '#4b5563';
+
+  let logoHtml = '';
+  if (logoUrl) {
+     logoHtml = `<img src="${logoUrl}" alt="Logo" style="max-height: 80px; width: auto; margin-bottom: 20px; display: block; margin-left: auto; margin-right: auto;">`;
+  }
+
+  let ctaHtml = '';
+  if (data.cta && data.cta.text && data.cta.url) {
+     ctaHtml = `
+       <div style="text-align: center; margin-top: 32px; margin-bottom: 32px;">
+         <a href="${data.cta.url}" style="background-color: ${primaryColor}; color: ${white}; padding: 14px 28px; border-radius: 8px; text-decoration: none; font-weight: bold; font-family: sans-serif; font-size: 16px; display: inline-block; box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.2);">${data.cta.text}</a>
+       </div>
+     `;
+  }
+
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <style>
+        body { margin: 0; padding: 0; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: ${grayBg}; }
+        .container { width: 100%; background-color: ${grayBg}; padding: 40px 20px; box-sizing: border-box; }
+        .card { background-color: ${white}; border-radius: 16px; max-width: 600px; margin: 0 auto; padding: 40px; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); border: 1px solid #e5e7eb; }
+        .header { text-align: center; margin-bottom: 30px; }
+        .app-title { color: ${textDark}; font-size: 24px; font-weight: 800; margin: 0; letter-spacing: -0.5px; }
+        .content { color: ${textGray}; font-size: 16px; line-height: 1.6; }
+        .footer { text-align: center; margin-top: 40px; font-size: 12px; color: #9ca3af; }
+        .footer a { color: #9ca3af; text-decoration: underline; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="card">
+          <div class="header">
+            ${logoHtml}
+            <h1 class="app-title">${data.title || appName}</h1>
+            ${data.subtitle ? `<p style="color: #6b7280; font-size: 14px; margin-top: 8px; font-weight: 500;">${data.subtitle}</p>` : ''}
+          </div>
+
+          <div class="content">
+            ${data.body}
+          </div>
+
+          ${ctaHtml}
+
+          <div class="footer">
+             <p style="margin-bottom: 8px; font-weight: 600;">${appName}</p>
+             <p>&copy; ${new Date().getFullYear()} Dirección de Innovación. Todos los derechos reservados.</p>
+             ${data.footerNote ? `<p style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #f3f4f6;">${data.footerNote}</p>` : ''}
+          </div>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+}
+
+function getLogoDataUrl_() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get('LOGO_IMG_V1');
+  if (cached) return cached;
+  const fileId = getConfigValue_('LOGO_ID');
+  if (!fileId) return null;
+  try {
+    const file = Drive.Files.get(fileId, { fields: 'thumbnailLink' });
+    if (!file || !file.thumbnailLink) return null;
+    // Use larger size
+    const url = file.thumbnailLink.replace(/=s\d+$/, '=s400');
+    const blob = UrlFetchApp.fetch(url, { headers: { 'Authorization': 'Bearer ' + ScriptApp.getOAuthToken() } }).getBlob();
+    const b64 = Utilities.base64Encode(blob.getBytes());
+    const dataUrl = 'data:image/png;base64,' + b64;
+    cache.put('LOGO_IMG_V1', dataUrl, 21600);
+    return dataUrl;
+  } catch (e) {
+     console.error("Error fetching logo: " + e.message);
+     return null;
+  }
+}
+
+function ensureConfigKey_(key, defaultValue, description) {
+  try {
+    const ss = SpreadsheetApp.getActive();
+    const sh = ss.getSheetByName('Config');
+    if (!sh) return;
+
+    // Check if exists using Cache or direct read (Direct is safer for Admin Panel load)
+    const data = sh.getDataRange().getValues();
+    let exists = false;
+    for(let i=1; i<data.length; i++) {
+       if(String(data[i][0]) === key) {
+          exists = true;
+          break;
+       }
+    }
+
+    if (!exists) {
+       sh.appendRow([key, defaultValue, description]);
+       _configCache = null; // Invalidate cache
+    }
+  } catch(e) {
+    console.error("Error ensuring config key: " + e.message);
   }
 }
 
@@ -1245,7 +1415,21 @@ function checkMenuIntegrity_() {
   Object.keys(menuMap).forEach(d => { if (!menuMap[d].hasRice) warnings.push(d); });
   if (warnings.length > 0) {
     const admins = getConfigValue_('ADMIN_EMAILS');
-    if (admins) sendEmail_(admins, "Alerta: Integridad de Menú", `Falta arroz blanco: ${warnings.join(', ')}`);
+    if (admins) {
+       const html = getEmailTemplate_({
+          title: '⚠️ Alerta de Menú',
+          body: `
+            <p>Se han detectado problemas de integridad en el menú cargado para las siguientes fechas:</p>
+            <div style="background-color: #fef2f2; padding: 16px; border-left: 4px solid #ef4444; margin: 16px 0; color: #b91c1c;">
+               <strong>Falta Arroz Blanco:</strong><br>
+               ${warnings.join('<br>')}
+            </div>
+            <p>Por favor, revisa el menú y corrige estas fechas para evitar problemas con las validaciones de pedidos (Granos).</p>
+          `,
+          cta: { text: 'Revisar Menú', url: ScriptApp.getService().getUrl() }
+       });
+       sendEmail_(admins, "Alerta: Integridad de Menú", html);
+    }
   }
 }
 
@@ -1255,9 +1439,21 @@ function sendDailyAdminSummary_(dateStr) {
   const orders = getOrdersByDate_(dateStr);
   const count = orders.length;
   if (count > 0) {
-    sendEmail_(admins, `Resumen Pedidos ${dateStr}`,
-      `Se han registrado <b>${count}</b> pedidos para el día ${dateStr}.<br>Respaldo en Drive.`
-    );
+     const formattedDate = Utilities.formatDate(new Date(dateStr + 'T12:00:00'), Session.getScriptTimeZone(), 'dd/MM/yyyy');
+     const html = getEmailTemplate_({
+        title: 'Resumen Diario',
+        subtitle: `Pedidos para el ${formattedDate}`,
+        body: `
+           <p>Resumen ejecutivo de la operación de almuerzo:</p>
+           <div style="text-align: center; margin: 24px 0;">
+              <span style="font-size: 48px; font-weight: 800; color: #111827;">${count}</span>
+              <p style="color: #6b7280; margin-top: 8px;">Pedidos Totales</p>
+           </div>
+           <p>Los respaldos detallados han sido generados y guardados en Google Drive.</p>
+        `,
+        cta: { text: 'Ver Panel Administrativo', url: ScriptApp.getService().getUrl() }
+     });
+    sendEmail_(admins, `Resumen Pedidos ${dateStr}`, html);
   }
 }
 
