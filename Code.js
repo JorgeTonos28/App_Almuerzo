@@ -1,7 +1,7 @@
 /**
  * Code.gs - Backend V5 (Refactor & New Features)
  */
-const APP_VERSION = 'v6.03';
+const APP_VERSION = 'v6.4';
 
 // === RUTAS E INICIO ===
 
