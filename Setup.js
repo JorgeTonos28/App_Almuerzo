@@ -117,7 +117,8 @@ function populateDefaultConfig_(sheet){
     ['RESPONSIBLES_EMAILS_JSON', '{}', 'JSON mapeo DeptoID->Emails.'],
     ['PLAN_WEEK_TEXT', '¡Planifica tu semana! Ahora puedes adelantar tus pedidos para todos los días disponibles.', 'Texto del banner de planificación'],
     ['PLAN_WEEK_LIMIT', '5', 'Número de veces que se mostrará el banner al usuario'],
-    ['DAILY_REPORT_MODEL_ID', '', 'ID del archivo modelo Excel para reportes diarios']
+    ['DAILY_REPORT_MODEL_ID', '', 'ID del archivo modelo Excel para reportes diarios'],
+    ['LOGO_ID', '', 'ID del archivo de imagen del Logo en Drive']
   ];
   sheet.getRange(2, 1, defaults.length, 3).setValues(defaults);
 }
