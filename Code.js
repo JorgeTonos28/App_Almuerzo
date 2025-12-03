@@ -1684,8 +1684,8 @@ function installTriggers() {
   ScriptApp.newTrigger('scheduledDailyClose')
     .timeBased()
     .everyDays(1)
-    .atHour(15) // 15 = 3 PM
-    .create();
+    .atHour(14) // 14 = 2 PM
+    .create(30);
     
   Logger.log("Activadores instalados correctamente.");
 }
