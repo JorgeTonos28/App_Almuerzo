@@ -25,6 +25,10 @@ createApp({
     const showMultiDayBanner = ref(false);
     const bannerConfig = ref({ text: '', limit: 5 });
     
+    // Summary Date Range
+    const summaryDateStart = ref('');
+    const summaryDateEnd = ref('');
+
     // Formulario
     const comments = ref('');
     const selection = reactive(new Set());
@@ -111,7 +115,7 @@ createApp({
        return adminState.users.filter(u =>
           u.nombre.toLowerCase().includes(q) ||
           u.email.toLowerCase().includes(q) ||
-          (u.codigo && u.codigo.includes(q)) ||
+          (u.codigo && String(u.codigo).includes(q)) ||
           u.departamento.toLowerCase().includes(q)
        );
     });
@@ -144,12 +148,13 @@ createApp({
        const f = adminState.filters.orders;
        const q = f.search.toLowerCase();
        return adminState.orders.filter(o => {
-          // Text Search (all fields including Creado Por)
+          // Text Search (all fields including Creado Por and Dept)
           if (q && !(
              o.nombre.toLowerCase().includes(q) ||
              o.email.toLowerCase().includes(q) ||
              o.resumen.toLowerCase().includes(q) ||
-             (o.creado_por && o.creado_por.toLowerCase().includes(q))
+             (o.creado_por && o.creado_por.toLowerCase().includes(q)) ||
+             (o.dept && o.dept.toLowerCase().includes(q))
           )) return false;
 
           // Date Range Match
@@ -181,23 +186,54 @@ createApp({
     // === SUMMARY TABLE HELPERS ===
     const summaryHeaders = computed(() => categoryOrder);
 
-    const userWeeklySummary = computed(() => {
-      if (!dates.value.length) return [];
+    // Initial Default Range check
+    const isDefaultSummary = computed(() => {
+       if (!summaryDateStart.value || !summaryDateEnd.value) return true;
+       const today = new Date();
+       const toYMD = (d) => d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+       const start = toYMD(today);
+       const next = new Date(today); next.setDate(today.getDate() + 7);
+       const end = toYMD(next);
+       return summaryDateStart.value === start && summaryDateEnd.value === end;
+    });
 
-      return dates.value.map(d => {
+    const summaryTitle = computed(() => isDefaultSummary.value ? "Mi Resumen Semanal" : "Resumen Diario");
+
+    const userWeeklySummary = computed(() => {
+      if (!summaryDateStart.value || !summaryDateEnd.value) return [];
+
+      const start = new Date(summaryDateStart.value + 'T12:00:00');
+      const end = new Date(summaryDateEnd.value + 'T12:00:00');
+      const list = [];
+
+      // Generate dates in range
+      for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+          const ymd = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+          // Skip weekends? Keeping them hidden if no order logic or just skip them entirely
+          // Requirement doesn't strictly say hide weekends but usually corporate lunch is Mon-Fri.
+          // However if a holiday is set on a weekday, it should probably appear if filtered?
+          // Let's stick to: If it's Saturday(6) or Sunday(0), skip.
+          if (d.getDay() === 0 || d.getDay() === 6) continue;
+
+          const label = d.toLocaleDateString('es-DO', {weekday:'long', day:'numeric', month:'numeric'});
+          // Capitalize first letter
+          const finalLabel = label.charAt(0).toUpperCase() + label.slice(1);
+
+          list.push({ value: ymd, label: finalLabel });
+      }
+
+      return list.map(d => {
         const order = allOrders.value[d.value];
         const row = { date: d.value, label: d.label, items: {} };
         let hasItems = false;
 
         if (order && order.detalle) {
           const det = order.detalle;
-          // det.categorias and det.items are parallel arrays
           if (Array.isArray(det.categorias) && Array.isArray(det.items)) {
              det.categorias.forEach((cat, idx) => {
                 if (!row.items[cat]) {
                    row.items[cat] = det.items[idx];
                 } else {
-                   // Append if multiple (e.g. Vegetariana)
                    row.items[cat] += ', ' + det.items[idx];
                 }
                 hasItems = true;
@@ -960,8 +996,21 @@ createApp({
        return value;
     };
 
+    const initSummaryDates = () => {
+       const today = new Date();
+       const next = new Date(today);
+       next.setDate(today.getDate() + 7);
+
+       const toYMD = (d) => {
+          return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+       };
+       summaryDateStart.value = toYMD(today);
+       summaryDateEnd.value = toYMD(next);
+    };
+
     // Inicialización
     onMounted(() => {
+      initSummaryDates();
       loadData(); // Carga inicial sin fecha (el servidor decide la primera disponible)
     });
 
@@ -969,6 +1018,7 @@ createApp({
       // Estado
       loading, submitting, user, menu, myOrder, adminData, 
       currentDate, dates, comments,
+      summaryDateStart, summaryDateEnd,
       
       // Computed
       isAdmin, isDeptAdmin, isAdminGen, menuLoaded, categories,
@@ -1009,7 +1059,7 @@ createApp({
       formatCatName, scrollToCat, getIconForCategory, formatConfigValue,
 
       // Summary
-      userWeeklySummary, summaryHeaders,
+      userWeeklySummary, summaryHeaders, summaryTitle,
 
       // Logo Animation
       logoAnimating, bubbleVisible, bubbleText, triggerLogoAnimation,
