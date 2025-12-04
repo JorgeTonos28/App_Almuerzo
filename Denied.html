@@ -116,12 +116,13 @@
 
   <script>
     document.getElementById('display-email').textContent = userEmail;
+    console.log("Status:", userStatus, "Infotep:", isInfotep);
 
     if (!isInfotep) {
        document.getElementById('view-domain').classList.remove('hidden');
-    } else if (userStatus === 'PENDIENTE') {
+    } else if (userStatus && userStatus.toUpperCase().trim() === 'PENDIENTE') {
        document.getElementById('view-pending').classList.remove('hidden');
-    } else if (userStatus === 'INACTIVO') {
+    } else if (userStatus && userStatus.toUpperCase().trim() === 'INACTIVO') {
        document.getElementById('view-inactive').classList.remove('hidden');
     } else {
        document.getElementById('view-new').classList.remove('hidden');
