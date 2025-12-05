@@ -358,11 +358,10 @@ createApp({
         .withSuccessHandler(res => {
           loading.value = false;
           if (res.ok) {
-            // Caso: No hay fechas futuras disponibles
+            // Caso: No hay fechas futuras disponibles (pero seguimos cargando usuario)
             if (res.empty) {
               dates.value = [];
               menu.value = {};
-              return;
             }
             // Cargar datos
             user.value = res.user;
