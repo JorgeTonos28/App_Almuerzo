@@ -184,11 +184,15 @@
         </div>
       </div>
       
-      <div v-else-if="!loading" class="bg-amber-50 border border-amber-100 p-6 rounded-2xl text-amber-800 text-center flex flex-col items-center gap-3">
-        <div class="w-12 h-12 bg-amber-100 rounded-full flex items-center justify-center text-xl">
-          <i class="fa-solid fa-clock"></i>
+      <div v-else-if="!loading && !myOrder" class="py-12 flex flex-col items-center justify-center text-center space-y-4 animate-fade-in">
+        <div class="bg-gray-100 p-6 rounded-full">
+            <i class="fa-solid fa-calendar-xmark text-4xl text-gray-400"></i>
         </div>
-        <p class="font-medium">No hay fechas disponibles para ordenar. (Cierre 2:30 PM)</p>
+        <h3 class="text-xl font-bold text-gray-800">No hay menús disponibles</h3>
+        <p class="text-gray-500 max-w-sm text-sm">
+           Por el momento no hay fechas habilitadas para realizar pedidos.
+           Vuelve más tarde o contacta al administrador.
+        </p>
       </div>
 
       <!-- Order Confirmed State (Receipt Style) -->
@@ -232,7 +236,7 @@
       </div>
 
       <!-- Menu Grid -->
-      <div v-else class="animate-fade-in">
+      <div v-else-if="dates.length > 0" class="animate-fade-in">
         <div v-if="!isCutoffPassed && menuLoaded" class="space-y-8">
           
           <!-- Category Pills (Sticky) -->
