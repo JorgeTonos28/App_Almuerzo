@@ -1,7 +1,7 @@
 /**
  * Code.gs - Backend V5 (Refactor & New Features)
  */
-const APP_VERSION = 'v6.6';
+const APP_VERSION = 'v6.4';
 
 // === RUTAS E INICIO ===
 
@@ -16,7 +16,7 @@ function doGet(e) {
     const denied = HtmlService.createTemplateFromFile('Denied');
     denied.signatureUrl = t.signatureUrl;
     denied.email = Session.getActiveUser().getEmail().toLowerCase();
-    denied.status = user && user.estado ? user.estado.trim().toUpperCase() : null;
+    denied.status = user ? user.estado : null;
     return denied.evaluate()
       .setTitle('Acceso Denegado')
       .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
@@ -117,11 +117,6 @@ function apiGetInitData(requestedDateStr, impersonateEmail) {
   }
 }
 
-function apiCheckUserStatus() {
-   const user = getUserInfo_();
-   return user ? user.estado : null;
-}
-
 function apiRequestAccess(data) {
   try {
      const email = Session.getActiveUser().getEmail().toLowerCase();
@@ -168,19 +163,6 @@ function apiRequestAccess(data) {
         });
         sendEmail_(admins, "Almuerzo Pre-empacado | Nueva Solicitud de Acceso", html);
      }
-
-     // Notify User
-     const userHtml = getEmailTemplate_({
-        title: 'Solicitud Recibida',
-        subtitle: 'Acceso en Proceso',
-        body: `
-          <p>Hola <strong>${data.name}</strong>,</p>
-          <p>Hemos recibido tu solicitud de acceso al sistema de almuerzo.</p>
-          <p>Tu solicitud está siendo procesada por el equipo administrativo. Recibirás un correo de confirmación una vez que tu acceso haya sido aprobado.</p>
-        `,
-        footerNote: 'Gracias por tu paciencia.'
-     });
-     sendEmail_(email, "Almuerzo Pre-empacado | Solicitud Recibida", userHtml);
 
      return { ok: true };
   } catch(e) { return { ok: false, msg: e.message }; }
@@ -1170,11 +1152,10 @@ function getAllMenus_(availableDates, menuData) {
 function getAllUserOrders_(email, availableDates, ordersData) {
   const data = ordersData || SpreadsheetApp.getActive().getSheetByName('Pedidos').getDataRange().getValues();
   const ordersMap = {};
-  // Return all active orders regardless of "availableDates" to support Summary view
-  // Frontend will decide what to show based on selected date range.
+  const validDates = new Set(availableDates.map(d => d.value));
   for (let i = 1; i < data.length; i++) {
     const rowDate = formatDate_(new Date(data[i][2]));
-    if (String(data[i][3]).toLowerCase() === email && data[i][8] !== 'CANCELADO') {
+    if (validDates.has(rowDate) && String(data[i][3]).toLowerCase() === email && data[i][8] !== 'CANCELADO') {
       ordersMap[rowDate] = { id: data[i][0], resumen: data[i][6], detalle: JSON.parse(data[i][7] || '{}') };
     }
   }
@@ -1284,19 +1265,7 @@ function sendEmail_(to, subject, htmlBody, cc, attachments) {
 
   if (cc && !testMode) options.cc = cc;
   if (testMode && cc) options.htmlBody = `<p><strong>[Original CC: ${cc}]</strong></p>` + options.htmlBody;
-
-  // Attachments handling (Array)
   if (attachments) options.attachments = attachments;
-
-  // Inline Images (CID) Logic for Logo
-  const logoId = getConfigValue_('LOGO_ID');
-  if (logoId && htmlBody.includes('cid:appLogo')) {
-     const logoBlob = getLogoBlob_(logoId);
-     if (logoBlob) {
-        if (!options.inlineImages) options.inlineImages = {};
-        options.inlineImages['appLogo'] = logoBlob;
-     }
-  }
 
   try {
     MailApp.sendEmail(options);
@@ -1310,21 +1279,22 @@ function sendEmail_(to, subject, htmlBody, cc, attachments) {
 function getEmailTemplate_(data) {
   // data: { title, subtitle, body, cta: {text, url}, footerNote }
 
-  // Use CID for robust email support
-  const appName = getConfigValue_('APP_TITLE') || 'Solicitud Almuerzo';
+  const logoUrl = getLogoDataUrl_() || '';
+  // If no logo, we can use a text header or just empty.
+  // The user requested a text based header AND a logo on top.
 
-  // If LOGO_ID exists, we assume sendEmail_ will attach it as 'appLogo'
-  const logoId = getConfigValue_('LOGO_ID');
-  let logoHtml = '';
-  if (logoId) {
-     logoHtml = `<img src="cid:appLogo" alt="Logo" style="max-height: 80px; width: auto; margin-bottom: 20px; display: block; margin-left: auto; margin-right: auto;">`;
-  }
+  const appName = getConfigValue_('APP_TITLE') || 'Solicitud Almuerzo';
 
   const primaryColor = '#2563eb'; // blue-600
   const grayBg = '#f9fafb';
   const white = '#ffffff';
   const textDark = '#111827';
   const textGray = '#4b5563';
+
+  let logoHtml = '';
+  if (logoUrl) {
+     logoHtml = `<img src="${logoUrl}" alt="Logo" style="max-height: 80px; width: auto; margin-bottom: 20px; display: block; margin-left: auto; margin-right: auto;">`;
+  }
 
   let ctaHtml = '';
   if (data.cta && data.cta.text && data.cta.url) {
@@ -1379,21 +1349,26 @@ function getEmailTemplate_(data) {
   `;
 }
 
-function getLogoBlob_(fileId) {
+function getLogoDataUrl_() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get('LOGO_IMG_V1');
+  if (cached) return cached;
+  const fileId = getConfigValue_('LOGO_ID');
   if (!fileId) return null;
   try {
-    // We can fetch directly using DriveApp for internal scripts
-    return DriveApp.getFileById(fileId).getBlob();
+    const file = Drive.Files.get(fileId, { fields: 'thumbnailLink' });
+    if (!file || !file.thumbnailLink) return null;
+    // Use larger size
+    const url = file.thumbnailLink.replace(/=s\d+$/, '=s400');
+    const blob = UrlFetchApp.fetch(url, { headers: { 'Authorization': 'Bearer ' + ScriptApp.getOAuthToken() } }).getBlob();
+    const b64 = Utilities.base64Encode(blob.getBytes());
+    const dataUrl = 'data:image/png;base64,' + b64;
+    cache.put('LOGO_IMG_V1', dataUrl, 21600);
+    return dataUrl;
   } catch (e) {
-     console.error("Error fetching logo blob: " + e.message);
+     console.error("Error fetching logo: " + e.message);
      return null;
   }
-}
-
-function getLogoDataUrl_() {
-   // Deprecated in favor of CID, but kept if needed for UI (not Email)
-   // ...
-   return null;
 }
 
 function ensureConfigKey_(key, defaultValue, description) {
@@ -1692,37 +1667,25 @@ function getDailyBackupFolder_(dateStr) {
  * Ejecuta esto una sola vez para activar la automatización.
  */
 function installTriggers() {
-  // 1. Borrar triggers existentes
+  // 1. Borrar triggers existentes para evitar duplicados
   const triggers = ScriptApp.getProjectTriggers();
   triggers.forEach(t => ScriptApp.deleteTrigger(t));
-
-  // Helper to parse HH:mm
-  const parseTime = (val, defH, defM) => {
-     if (val instanceof Date) return { h: val.getHours(), m: val.getMinutes() };
-     if (typeof val === 'string' && val.includes(':')) {
-        const p = val.split(':');
-        return { h: parseInt(p[0]||defH), m: parseInt(p[1]||defM) };
-     }
-     return { h: defH, m: defM };
-  };
   
-  // 2. Recordatorios (HORA_RECORDATORIO)
-  const recTime = parseTime(getConfigValue_('HORA_RECORDATORIO'), 13, 0); // Default 1:00 PM
+  // 2. Crear trigger para Recordatorios (Ej: 1:30 PM)
   ScriptApp.newTrigger('scheduledSendReminders')
     .timeBased()
     .everyDays(1)
-    .atHour(recTime.h)
-    .nearMinute(recTime.m)
+    .atHour(13) // 13 = 1 PM
+    .nearMinute(30)
     .create();
     
-  // 3. Cierre y Reportes (HORA_ENVIO)
-  const closeTime = parseTime(getConfigValue_('HORA_ENVIO'), 15, 0); // Default 3:00 PM
+  // 3. Crear trigger para Cierre y Reportes (Ej: 3:00 PM)
+  // Asegúrate de que coincida con tu HORA_ENVIO en la hoja Config
   ScriptApp.newTrigger('scheduledDailyClose')
     .timeBased()
     .everyDays(1)
-    .atHour(closeTime.h)
-    .nearMinute(closeTime.m)
-    .create();
+    .atHour(14) // 14 = 2 PM
+    .create(30);
     
-  Logger.log(`Activadores instalados. Recordatorio: ${recTime.h}:${recTime.m}, Cierre: ${closeTime.h}:${closeTime.m}`);
+  Logger.log("Activadores instalados correctamente.");
 }
