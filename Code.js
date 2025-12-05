@@ -1,7 +1,7 @@
 /**
  * Code.gs - Backend V5 (Refactor & New Features)
  */
-const APP_VERSION = 'v6.6';
+const APP_VERSION = 'v6.7';
 
 // === RUTAS E INICIO ===
 
@@ -281,6 +281,12 @@ function apiDismissBanner() {
 // === AUTOMATIZACIÓN (TRIGGERS) ===
 
 function scheduledSendReminders() {
+  // Only run on business days
+  if (!isTodayBusinessDay_()) {
+     console.log("Skipping scheduledSendReminders: Not a business day.");
+     return;
+  }
+
   const nextBusinessDay = getNextBusinessDay_(new Date());
   if (!nextBusinessDay) return;
 
@@ -342,6 +348,12 @@ function scheduledSendReminders() {
 }
 
 function scheduledDailyClose() {
+  // Only run on business days
+  if (!isTodayBusinessDay_()) {
+     console.log("Skipping scheduledDailyClose: Not a business day.");
+     return;
+  }
+
   const now = new Date();
   const nextBusinessDay = getNextBusinessDay_(now);
   if (!nextBusinessDay) return;
@@ -439,11 +451,6 @@ function scheduledDailyClose() {
   // 4. Maintenance & Admin Summary
   checkMenuIntegrity_();
   sendDailyAdminSummary_(dateStr);
-}
-
-function scheduledDepartmentReports() {
-  // Deprecated. Logic moved to scheduledDailyClose.
-  console.log("Trigger scheduledDepartmentReports is deprecated.");
 }
 
 // === ADMIN API ===
@@ -1091,6 +1098,20 @@ function getPreviousBusinessDay_(date, holidaysSet) {
   do { d.setDate(d.getDate() - 1); }
   while (d.getDay() === 0 || d.getDay() === 6 || holidaysSet.has(formatDate_(d)));
   return d;
+}
+
+function isTodayBusinessDay_() {
+  const now = new Date();
+  const day = now.getDay();
+  // Weekend
+  if (day === 0 || day === 6) return false;
+
+  // Holidays
+  const dateStr = formatDate_(now);
+  const holidays = getHolidaysSet_();
+  if (holidays.has(dateStr)) return false;
+
+  return true;
 }
 
 function formatDate_(date) {
