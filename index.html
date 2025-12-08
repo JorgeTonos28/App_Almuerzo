@@ -534,8 +534,6 @@
                         <input v-if="item.key === 'HORA_ENVIO' || item.key === 'HORA_RECORDATORIO'" type="time" v-model="adminState.config[item.key]" class="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500">
                         <input v-else-if="item.key.includes('LIMIT') || item.key.includes('MINUTOS')" type="number" v-model="adminState.config[item.key]" class="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500">
                         <input v-else type="text" v-model="adminState.config[item.key]" class="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500">
-
-                        <p v-if="item.key === 'HORA_ENVIO'" class="mt-1 text-[10px] text-amber-600 flex items-center gap-1"><i class="fa-solid fa-triangle-exclamation"></i> Actualizar Trigger manualmente.</p>
                      </div>
                   </div>
                </div>
