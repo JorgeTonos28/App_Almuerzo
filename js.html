@@ -6,6 +6,7 @@ createApp({
     // === ESTADO (STATE) ===
     const loading = ref(true);
     const submitting = ref(false);
+    const activeUsersCount = ref(0);
     
     // Datos del usuario y app
     const user = ref({});
@@ -57,6 +58,24 @@ createApp({
        msgModal.type = type;
        msgModal.onConfirm = onOk;
        msgModal.open = true;
+    };
+
+    const startHeartbeat = () => {
+       // Llamada inicial
+       runHeartbeat();
+       // Repetir cada 45 segundos
+       setInterval(runHeartbeat, 45000);
+    };
+
+    const runHeartbeat = () => {
+       google.script.run
+         .withSuccessHandler(res => {
+            if (res && res.count !== null) {
+               activeUsersCount.value = res.count;
+            }
+         })
+         .withFailureHandler(() => { /* Silencioso en error */ })
+         .apiHeartbeat();
     };
 
     const closeMsgModal = () => {
@@ -494,7 +513,12 @@ createApp({
     // Admin Actions
     const openUserModal = (u = null) => {
        adminState.userModal.isNew = !u;
-       adminState.userModal.data = u ? { ...u } : { email: '', nombre: '', codigo: '', departamento: activeUser.value.departamento || '', rol: 'USUARIO', estado: 'ACTIVO' };
+       
+       // CORRECCIÓN: Usamos departamentoId si existe (u), o el ID del usuario activo si es nuevo
+       adminState.userModal.data = u 
+          ? { ...u, departamento: u.departamentoId } 
+          : { email: '', nombre: '', codigo: '', departamento: activeUser.value.departamentoId || '', rol: 'USUARIO', estado: 'ACTIVO' };
+       
        adminState.userModal.open = true;
     };
 
@@ -519,7 +543,10 @@ createApp({
     const toggleUserStatus = (u) => {
        showModal(`¿${u.estado === 'ACTIVO' ? 'Desactivar' : 'Activar'} a ${u.nombre}?`, "Confirmar Cambio", "CONFIRM", () => {
           const newState = u.estado === 'ACTIVO' ? 'INACTIVO' : 'ACTIVO';
-          const payload = { ...u, estado: newState };
+          
+          // CORRECCIÓN: Sobrescribimos 'departamento' con el ID antes de enviar
+          const payload = { ...u, estado: newState, departamento: u.departamentoId }; 
+          
           adminState.loading = true;
           google.script.run.withSuccessHandler(() => { loadAdminData(true); }).apiAdminSaveUser(payload);
        });
@@ -1014,14 +1041,15 @@ createApp({
     // Inicialización
     onMounted(() => {
       initSummaryDates();
-      loadData(); // Carga inicial sin fecha (el servidor decide la primera disponible)
+      loadData(); 
+      startHeartbeat(); // <--- Iniciar aquí
     });
 
     return {
       // Estado
       loading, submitting, user, menu, myOrder, adminData, 
       currentDate, dates, comments,
-      summaryDateStart, summaryDateEnd,
+      summaryDateStart, summaryDateEnd, activeUsersCount,
       
       // Computed
       isAdmin, isDeptAdmin, isAdminGen, menuLoaded, categories,

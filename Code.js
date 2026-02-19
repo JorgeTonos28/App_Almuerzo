@@ -1,7 +1,7 @@
 /**
  * Code.gs - Backend V5 (Refactor & New Features)
  */
-const APP_VERSION = 'v6.8';
+const APP_VERSION = 'v7.0';
 
 // === RUTAS E INICIO ===
 
@@ -165,7 +165,7 @@ function apiRequestAccess(data) {
              </div>
              <p>Ingresa al Panel de Administración para verificar y aprobar esta solicitud.</p>
            `,
-           cta: { text: 'Ir al Panel de Administración', url: ScriptApp.getService().getUrl() }
+           cta: { text: 'Ir al Panel de Administración', url: getAppUrl_() }
         });
         sendEmail_(admins, "Almuerzo Pre-empacado | Nueva Solicitud de Acceso", html);
      }
@@ -292,6 +292,23 @@ function scheduledSendReminders() {
   if (!nextBusinessDay) return;
 
   const dateStr = formatDate_(nextBusinessDay);
+
+  // -- Check if Menu exists for target date --
+  const mSh = SpreadsheetApp.getActive().getSheetByName('Menu');
+  const mData = mSh.getDataRange().getValues();
+  let hasMenu = false;
+  for(let i=1; i<mData.length; i++) {
+     if (formatDate_(new Date(mData[i][1])) === dateStr && String(mData[i][5]) === 'SI') {
+        hasMenu = true;
+        break;
+     }
+  }
+
+  if (!hasMenu) {
+     console.log(`Skipping reminders. No menu found for ${dateStr}.`);
+     return;
+  }
+
   const ss = SpreadsheetApp.getActive();
   const uSh = ss.getSheetByName('Usuarios');
   const uData = uSh.getDataRange().getValues();
@@ -325,7 +342,7 @@ function scheduledSendReminders() {
       limitDate.setMinutes(limitDate.getMinutes() - mins);
       const limitStr = Utilities.formatDate(limitDate, Session.getScriptTimeZone(), 'hh:mm a');
 
-      const appUrl = ScriptApp.getService().getUrl();
+      const appUrl = getAppUrl_();
       const userName = row[1] ? row[1].split(' ')[0] : 'Colaborador'; // First name
 
       const html = getEmailTemplate_({
@@ -395,13 +412,56 @@ function scheduledDailyClose() {
   const deptMap = getDepartmentMap_();
   const backupFolder = getDailyBackupFolder_(dateStr);
 
+  // =================================================================
+  // NUEVO: Cargar Admins de Departamento (Mapeo ID -> [Emails])
+  // =================================================================
+  const deptAdminsMap = {};
+  const uSh = SpreadsheetApp.getActive().getSheetByName('Usuarios');
+  const uData = uSh.getDataRange().getValues();
+  
+  // Empezamos en 1 para saltar encabezados
+  for(let i=1; i<uData.length; i++) {
+     const email = String(uData[i][0]).toLowerCase();
+     const deptId = uData[i][2];
+     const rol = uData[i][3];
+     const estado = uData[i][4];
+     
+     // Filtramos solo ADMIN_DEP que estén ACTIVOS
+     if (rol === 'ADMIN_DEP' && estado === 'ACTIVO') {
+        if (!deptAdminsMap[deptId]) deptAdminsMap[deptId] = [];
+        deptAdminsMap[deptId].push(email);
+     }
+  }
+  // =================================================================
+
   // 3. Process each Department
   Object.keys(byDept).forEach(deptId => {
     const deptName = deptMap[deptId] || deptId;
     const deptOrders = byDept[deptId];
 
     // Resolve recipients for this department
-    const { to: toList, cc: ccList } = getRecipientsForDept(deptId);
+    // CAMBIO: Usamos 'let' en lugar de 'const' para poder modificar ccList
+    let { to: toList, cc: ccList } = getRecipientsForDept(deptId);
+
+    // ===============================================================
+    // NUEVO: Inyectar Admins del Depto actual en el CC
+    // ===============================================================
+    const admins = deptAdminsMap[deptId];
+    if (admins && admins.length > 0) {
+       // Convertimos el string actual de CC en array
+       let ccArray = ccList ? ccList.split(',').map(e => e.trim()).filter(e => e) : [];
+       
+       // Agregamos los admins si no están ya en la lista
+       admins.forEach(adminEmail => {
+          if (!ccArray.includes(adminEmail)) {
+             ccArray.push(adminEmail);
+          }
+       });
+       
+       // Volvemos a unir en string
+       ccList = ccArray.join(',');
+    }
+    // ===============================================================
 
     // Format Filename Date: dd-MM-yyyy
     const d = new Date(dateStr + 'T12:00:00');
@@ -496,6 +556,7 @@ function apiGetAdminData() {
     // Config & Holidays (Admin Gen only)
     if (user.rol === 'ADMIN_GEN') {
        ensureConfigKey_('LOGO_ID', '', 'ID del archivo de imagen del Logo en Drive');
+       ensureConfigKey_('APP_URL', ScriptApp.getService().getUrl(), 'URL pública de la aplicación (Web App)');
        data.config = getConfigValue_('ALL');
        for (const k in data.config) {
           const val = data.config[k];
@@ -540,13 +601,24 @@ function apiSaveConfig(configData) {
      const sh = ss.getSheetByName('Config');
      const data = sh.getDataRange().getValues();
 
+     let timeChanged = false;
+
      for(let i=1; i<data.length; i++) {
         const key = String(data[i][0]);
         if (configData[key] !== undefined) {
-           sh.getRange(i+1, 2).setValue(configData[key]);
+           const val = configData[key];
+           if ((key === 'HORA_RECORDATORIO' || key === 'HORA_ENVIO') && String(data[i][1]) !== String(val)) {
+              timeChanged = true;
+           }
+           sh.getRange(i+1, 2).setValue(val);
         }
      }
      _configCache = null;
+
+     if (timeChanged) {
+        reinstallTimeTriggers_();
+     }
+
      return { ok: true };
    } catch (e) { return { ok: false, msg: e.message }; }
 }
@@ -702,7 +774,7 @@ function apiAdminSaveUser(userData) {
           <p>Tu cuenta ha sido activada exitosamente.</p>
           <p>Ya puedes ingresar al sistema para realizar tus pedidos de almuerzo.</p>
         `,
-        cta: { text: 'Ingresar a la App', url: ScriptApp.getService().getUrl() }
+        cta: { text: 'Ingresar a la App', url: getAppUrl_() }
      });
      sendEmail_(userData.email, "Almuerzo Pre-empacado | Acceso Aprobado", html);
   }
@@ -907,6 +979,54 @@ function apiDeleteHoliday(dateStr) {
 }
 
 // === UTILS ===
+
+function apiHeartbeat() {
+  const user = getUserInfo_();
+  // Si no hay usuario autenticado, salimos
+  if (!user) return { count: null };
+
+  const lock = LockService.getScriptLock();
+  // Intentamos bloquear por 2s para evitar colisiones de escritura en la caché
+  if (lock.tryLock(2000)) {
+    try {
+      const cache = CacheService.getScriptCache();
+      const KEY = 'ACTIVE_SESSIONS_V1';
+      const raw = cache.get(KEY);
+      let sessions = raw ? JSON.parse(raw) : {};
+      
+      const now = Date.now();
+      const TIME_WINDOW = 5 * 60 * 1000; // 5 minutos de inactividad para considerar "offline"
+
+      // 1. Registrar/Actualizar al usuario actual
+      sessions[user.email] = now;
+
+      // 2. Limpiar usuarios antiguos y contar
+      let count = 0;
+      const cleanSessions = {};
+      Object.keys(sessions).forEach(email => {
+         if (now - sessions[email] < TIME_WINDOW) {
+            cleanSessions[email] = sessions[email];
+            count++;
+         }
+      });
+
+      // 3. Guardar cambios (TTL de 6 horas para el contenedor)
+      cache.put(KEY, JSON.stringify(cleanSessions), 21600);
+
+      // 4. Retornar conteo SOLO si es Administrador General
+      if (user.rol === 'ADMIN_GEN') {
+         return { count: count };
+      }
+      
+    } catch (e) {
+      console.error('Error en heartbeat:', e);
+    } finally {
+      lock.releaseLock();
+    }
+  }
+  
+  return { count: null };
+}
 
 function getUserInfo_(targetEmail, usersData) {
   const email = targetEmail ? targetEmail.toLowerCase() : Session.getActiveUser().getEmail().toLowerCase();
@@ -1473,7 +1593,7 @@ function checkMenuIntegrity_() {
             </div>
             <p>Por favor, revisa el menú y corrige estas fechas para evitar problemas con las validaciones de pedidos (Granos).</p>
           `,
-          cta: { text: 'Revisar Menú', url: ScriptApp.getService().getUrl() }
+          cta: { text: 'Revisar Menú', url: getAppUrl_() }
        });
        sendEmail_(admins, "Almuerzo Pre-empacado | Alerta: Integridad de Menú", html);
     }
@@ -1498,7 +1618,7 @@ function sendDailyAdminSummary_(dateStr) {
            </div>
            <p>Los respaldos detallados han sido generados y guardados en Google Drive.</p>
         `,
-        cta: { text: 'Ver Panel Administrativo', url: ScriptApp.getService().getUrl() }
+        cta: { text: 'Ver Panel Administrativo', url: getAppUrl_() }
      });
     sendEmail_(admins, `Almuerzo Pre-empacado | Resumen Pedidos ${dateStr}`, html);
   }
@@ -1711,12 +1831,44 @@ function getDailyBackupFolder_(dateStr) {
 }
 
 /**
- * Ejecuta esto una sola vez para activar la automatización.
+ * Instala TODOS los triggers necesarios (Time-based y Edit-based).
+ * Ejecutar esto manualmente una vez para inicializar.
  */
 function installTriggers() {
-  // 1. Borrar triggers existentes
+  const ss = SpreadsheetApp.getActive();
+
+  // 1. Manage Spreadsheet OnEdit Trigger (Persistent)
   const triggers = ScriptApp.getProjectTriggers();
-  triggers.forEach(t => ScriptApp.deleteTrigger(t));
+  let onEditExists = false;
+
+  triggers.forEach(t => {
+    if (t.getHandlerFunction() === 'onSpreadsheetEdit') {
+      onEditExists = true;
+    }
+  });
+
+  if (!onEditExists) {
+    ScriptApp.newTrigger('onSpreadsheetEdit')
+      .forSpreadsheet(ss)
+      .onEdit()
+      .create();
+    console.log("Trigger 'onSpreadsheetEdit' instalado.");
+  }
+
+  // 2. Install Time Triggers
+  reinstallTimeTriggers_();
+}
+
+function reinstallTimeTriggers_() {
+  const triggers = ScriptApp.getProjectTriggers();
+  // Delete only time triggers (scheduledSendReminders, scheduledDailyClose)
+  const targets = ['scheduledSendReminders', 'scheduledDailyClose'];
+
+  triggers.forEach(t => {
+    if (targets.includes(t.getHandlerFunction())) {
+      ScriptApp.deleteTrigger(t);
+    }
+  });
 
   // Helper to parse HH:mm
   const parseTime = (val, defH, defM) => {
@@ -1728,7 +1880,7 @@ function installTriggers() {
      return { h: defH, m: defM };
   };
   
-  // 2. Recordatorios (HORA_RECORDATORIO)
+  // Recordatorios (HORA_RECORDATORIO)
   const recTime = parseTime(getConfigValue_('HORA_RECORDATORIO'), 13, 0); // Default 1:00 PM
   ScriptApp.newTrigger('scheduledSendReminders')
     .timeBased()
@@ -1737,7 +1889,7 @@ function installTriggers() {
     .nearMinute(recTime.m)
     .create();
     
-  // 3. Cierre y Reportes (HORA_ENVIO)
+  // Cierre y Reportes (HORA_ENVIO)
   const closeTime = parseTime(getConfigValue_('HORA_ENVIO'), 15, 0); // Default 3:00 PM
   ScriptApp.newTrigger('scheduledDailyClose')
     .timeBased()
@@ -1746,5 +1898,30 @@ function installTriggers() {
     .nearMinute(closeTime.m)
     .create();
     
-  Logger.log(`Activadores instalados. Recordatorio: ${recTime.h}:${recTime.m}, Cierre: ${closeTime.h}:${closeTime.m}`);
+  console.log(`Triggers de tiempo reinstalados. Recordatorio: ${recTime.h}:${recTime.m}, Cierre: ${closeTime.h}:${closeTime.m}`);
+}
+
+function onSpreadsheetEdit(e) {
+  // Check if edit is in Config sheet
+  const range = e.range;
+  const sheet = range.getSheet();
+  if (sheet.getName() !== 'Config') return;
+
+  // Check if edited column is Value (Col 2) or Key (Col 1)
+  // We care if the Key (Col 1) corresponding to this row is HORA_RECORDATORIO or HORA_ENVIO
+  const row = range.getRow();
+  if (row <= 1) return; // Header
+
+  const key = sheet.getRange(row, 1).getValue();
+  if (key === 'HORA_RECORDATORIO' || key === 'HORA_ENVIO') {
+    console.log(`Detectado cambio en ${key}. Reinstalando triggers...`);
+    // Invalidate Cache
+    _configCache = null;
+    reinstallTimeTriggers_();
+  }
+}
+
+function getAppUrl_() {
+   const url = getConfigValue_('APP_URL');
+   return url || ScriptApp.getService().getUrl();
 }
