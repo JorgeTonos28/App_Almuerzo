@@ -2,6 +2,7 @@
   /* Personalización extra sobre Tailwind */
   body {
     -webkit-tap-highlight-color: transparent;
+    font-family: 'Inter', sans-serif;
   }
   
   /* Scrollbar oculta para pestañas horizontales */
@@ -24,5 +25,94 @@
   }
   .fade-enter-from, .fade-leave-to {
     opacity: 0;
+  }
+
+  @keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .animate-fade-in-up {
+    animation: fadeInUp 0.5s ease-out forwards;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  .animate-fade-in {
+    animation: fadeIn 0.5s ease-out forwards;
+  }
+
+  @keyframes wave {
+    0% { transform: rotate(0deg); }
+    20% { transform: rotate(15deg); }
+    40% { transform: rotate(-10deg); }
+    60% { transform: rotate(5deg); }
+    100% { transform: rotate(0deg); }
+  }
+  .animate-wave {
+    display: inline-block;
+    animation: wave 2s infinite;
+    transform-origin: 70% 70%;
+  }
+
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-5px); }
+    75% { transform: translateX(5px); }
+  }
+  .animate-shake {
+    animation: shake 0.4s ease-in-out;
+  }
+
+  @keyframes bounceSlow {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-10px); }
+  }
+  .animate-bounce-slow {
+    animation: bounceSlow 3s infinite ease-in-out;
+  }
+
+  @keyframes jumpSpin {
+    0% { transform: translateY(0) rotate(0deg); }
+    40% { transform: translateY(-15px) rotate(0deg); }
+    100% { transform: translateY(0) rotate(360deg); }
+  }
+  .animate-jump-spin {
+    animation: jumpSpin 0.5s ease-in-out;
+  }
+
+  /* Speech Bubble */
+  .speech-bubble {
+    position: absolute;
+    top: 90%; /* Slight overlap or just below */
+    left: 80%; /* Shift to right */
+    transform: none;
+    background: #111827;
+    color: white;
+    padding: 0.5rem 1rem;
+    border-radius: 1rem;
+    border-bottom-left-radius: 0; /* Comic style */
+    font-size: 0.75rem;
+    font-weight: bold;
+    white-space: nowrap;
+    z-index: 60;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+    min-width: 80px;
+    text-align: center;
+    border: 1px solid rgba(255,255,255,0.1);
+  }
+  /* Tail logic */
+  .speech-bubble::before {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: -6px;
+    width: 0;
+    height: 0;
+    border-style: solid;
+    border-width: 0 0 12px 12px;
+    border-color: transparent transparent #111827 transparent;
+    transform: rotate(0deg);
   }
 </style>
