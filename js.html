@@ -1,5 +1,5 @@
 <script>
-const { createApp, ref, computed, onMounted, reactive } = Vue;
+const { createApp, ref, computed, onMounted, reactive, nextTick } = Vue;
 
 createApp({
   setup() {
@@ -25,6 +25,15 @@ createApp({
     const remindersEnabled = ref(true);
     const showMultiDayBanner = ref(false);
     const bannerConfig = ref({ text: '', limit: 5 });
+    const mealPricing = ref({ current: 57, history: [{ from: '1900-01-01', price: 57 }] });
+    const currentUserPrefs = ref({});
+    const todayYmd = ref('');
+    const hintConfig = ref({
+      summaryCost: { limit: 3, expiresOn: '' },
+      caldoMulti: { limit: 3, expiresOn: '' }
+    });
+    const summaryCostHintEl = ref(null);
+    const hasFocusedSummaryCostHint = ref(false);
     
     // Summary Date Range
     const summaryDateStart = ref('');
@@ -42,6 +51,7 @@ createApp({
     const bubbleVisible = ref(false);
     const bubbleText = ref('');
     const bubbleTimer = ref(null);
+    const heartbeatTimer = ref(null);
 
     // Message Modal State
     const msgModal = reactive({
@@ -61,10 +71,16 @@ createApp({
     };
 
     const startHeartbeat = () => {
-       // Llamada inicial
+       if (activeUser.value?.rol !== 'ADMIN_GEN') return;
+       if (heartbeatTimer.value) return;
        runHeartbeat();
-       // Repetir cada 45 segundos
-       setInterval(runHeartbeat, 45000);
+       heartbeatTimer.value = window.setInterval(runHeartbeat, 45000);
+    };
+
+    const stopHeartbeat = () => {
+       if (!heartbeatTimer.value) return;
+       window.clearInterval(heartbeatTimer.value);
+       heartbeatTimer.value = null;
     };
 
     const runHeartbeat = () => {
@@ -201,6 +217,97 @@ createApp({
     });
     
     const selectedCount = computed(() => selection.size);
+    const minorMenuWords = new Set(['de', 'del', 'la', 'las', 'el', 'los', 'y', 'e', 'o', 'u', 'con', 'al', 'en']);
+    const multiSelectCats = ['Vegetariana', 'Caldo', 'Opcion_Rapida'];
+
+    const formatMenuText = (value) => {
+      if (value === null || value === undefined) return '';
+
+      const cleaned = String(value).trim().replace(/\s+/g, ' ');
+      if (!cleaned) return '';
+
+      return cleaned
+        .toLowerCase()
+        .split(' ')
+        .map((word, index) => {
+          return word
+            .split(/([/-])/)
+            .map(part => {
+              if (!part || part === '/' || part === '-') return part;
+              if (index > 0 && minorMenuWords.has(part)) return part;
+              return part.charAt(0).toUpperCase() + part.slice(1);
+            })
+            .join('');
+        })
+        .join(' ');
+    };
+
+    const formatCurrency = (value) => {
+      const amount = Number(value || 0);
+      return new Intl.NumberFormat('es-DO', {
+        style: 'currency',
+        currency: 'DOP',
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      }).format(amount);
+    };
+
+    const getMealPriceForDate = (dateStr) => {
+      const fallback = Number(mealPricing.value?.current || 57);
+      const history = Array.isArray(mealPricing.value?.history) ? mealPricing.value.history : [];
+      const sortedHistory = history
+        .filter(entry => entry && entry.from && entry.price !== undefined)
+        .slice()
+        .sort((a, b) => a.from.localeCompare(b.from));
+
+      let resolvedPrice = fallback;
+      sortedHistory.forEach(entry => {
+        if (entry.from <= dateStr) {
+          resolvedPrice = Number(entry.price || resolvedPrice);
+        }
+      });
+
+      return resolvedPrice;
+    };
+
+    const isHintActive = (config, prefKey) => {
+      if (!config || !todayYmd.value || !config.expiresOn) return false;
+      if (todayYmd.value > config.expiresOn) return false;
+      return Number(currentUserPrefs.value?.[prefKey] || 0) < Number(config.limit || 0);
+    };
+
+    const resetSelectionState = () => {
+      selection.clear();
+      for (const prop of Object.getOwnPropertyNames(selectionData)) {
+        delete selectionData[prop];
+      }
+      comments.value = '';
+    };
+
+    const showSummaryCostHint = computed(() => {
+      return userWeeklySummary.value.length > 0 && isHintActive(hintConfig.value.summaryCost, 'summary_cost_hint_count');
+    });
+
+    const showCaldoMultiHint = computed(() => {
+      return Array.isArray(menu.value?.Caldo) && menu.value.Caldo.length > 0 && isHintActive(hintConfig.value.caldoMulti, 'caldo_multi_hint_count');
+    });
+
+    const shouldScrollSummaryCards = computed(() => userWeeklySummary.value.length > 8);
+
+    const focusSummaryCostHint = () => {
+      if (hasFocusedSummaryCostHint.value) return;
+      if (!showSummaryCostHint.value || userWeeklySummary.value.length === 0) return;
+
+      nextTick(() => {
+        window.setTimeout(() => {
+          const el = summaryCostHintEl.value;
+          if (!el) return;
+          hasFocusedSummaryCostHint.value = true;
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          if (typeof el.focus === 'function') el.focus({ preventScroll: true });
+        }, 250);
+      });
+    };
 
     // === SUMMARY TABLE HELPERS ===
     const summaryHeaders = computed(() => categoryOrder);
@@ -243,7 +350,7 @@ createApp({
 
       return list.map(d => {
         const order = allOrders.value[d.value];
-        const row = { date: d.value, label: d.label, items: {} };
+        const row = { date: d.value, label: d.label, items: {}, mealPrice: getMealPriceForDate(d.value) };
         let hasItems = false;
 
         if (order && order.detalle) {
@@ -261,6 +368,10 @@ createApp({
         }
         return hasItems ? row : null;
       }).filter(r => r !== null);
+    });
+
+    const userSummaryTotalCost = computed(() => {
+      return userWeeklySummary.value.reduce((total, row) => total + Number(row.mealPrice || 0), 0);
     });
 
     const displayDate = computed(() => {
@@ -364,49 +475,69 @@ createApp({
 
     // === ACCIONES (ACTIONS) ===
 
+    const applyInitData = (res) => {
+      if (res.empty) {
+        dates.value = [];
+        menu.value = {};
+      }
+
+      user.value = res.user;
+      activeUser.value = res.activeUser || {};
+      deptUsers.value = res.deptUsers || [];
+      menu.value = res.menu || {};
+      myOrder.value = res.myOrder || null;
+      allMenus.value = res.allMenus || {};
+      allOrders.value = res.allOrders || {};
+      adminData.value = res.adminData || null;
+      currentUserPrefs.value = res.userPrefs || {};
+      remindersEnabled.value = res.userPrefs?.reminders !== false;
+
+      if (res.deptMap) adminState.deptMap = res.deptMap;
+      if (res.nextBusinessDay) adminState.nextBusinessDay = res.nextBusinessDay;
+
+      bannerConfig.value = res.bannerConfig || { text: '', limit: 5 };
+      showMultiDayBanner.value = Number(res.userPrefs?.banner_count || 0) < Number(bannerConfig.value.limit || 0);
+      mealPricing.value = res.mealPricing || { current: 57, history: [{ from: '1900-01-01', price: 57 }] };
+      hintConfig.value = res.hintConfig || hintConfig.value;
+      todayYmd.value = res.todayYmd || todayYmd.value;
+      hasFocusedSummaryCostHint.value = false;
+      if (res.activeUser?.rol === 'ADMIN_GEN') startHeartbeat();
+      else stopHeartbeat();
+
+      currentDate.value = res.currentDate;
+      dates.value = res.dates || [];
+
+      if ((res.activeUser?.rol === 'ADMIN_GEN' || res.activeUser?.rol === 'ADMIN_DEP') && adminState.users.length === 0 && !adminState.loading) {
+        window.setTimeout(() => loadAdminData(false, { silent: true }), 120);
+      }
+
+      focusSummaryCostHint();
+    };
+
+    const applyDateViewData = (res) => {
+      currentDate.value = res.currentDate;
+      menu.value = res.menu || {};
+      myOrder.value = res.myOrder || null;
+      allMenus.value = { ...allMenus.value, [res.currentDate]: res.menu || {} };
+
+      const nextOrders = { ...allOrders.value };
+      if (res.myOrder) nextOrders[res.currentDate] = res.myOrder;
+      else delete nextOrders[res.currentDate];
+      allOrders.value = nextOrders;
+
+      if (res.adminData) adminData.value = res.adminData;
+      resetSelectionState();
+    };
+
     const loadData = (targetDate = null) => {
       loading.value = true;
       // Limpiamos selección al cambiar de día o recargar
-      selection.clear();
-      for (const prop of Object.getOwnPropertyNames(selectionData)) {
-        delete selectionData[prop];
-      }
-      comments.value = '';
-
+      resetSelectionState();
       google.script.run
         .withSuccessHandler(res => {
           loading.value = false;
           if (res.ok) {
-            // Caso: No hay fechas futuras disponibles (pero seguimos cargando usuario)
-            if (res.empty) {
-              dates.value = [];
-              menu.value = {};
-            }
-            // Cargar datos
-            user.value = res.user;
-            activeUser.value = res.activeUser || {};
-            deptUsers.value = res.deptUsers || [];
-            menu.value = res.menu;
-            myOrder.value = res.myOrder;
-            allMenus.value = res.allMenus || {};
-            allOrders.value = res.allOrders || {};
-            adminData.value = res.adminData;
-            remindersEnabled.value = res.userPrefs?.reminders !== false;
-
-            // Map Dept IDs if needed (e.g. for display in Admin)
-            if (res.deptMap) adminState.deptMap = res.deptMap;
-
-            if (res.nextBusinessDay) adminState.nextBusinessDay = res.nextBusinessDay;
-
-            bannerConfig.value = res.bannerConfig || { text: '', limit: 5 };
-            const bCount = res.userPrefs?.banner_count || 0;
-            if (bCount < bannerConfig.value.limit) {
-              showMultiDayBanner.value = true;
-            }
-            
-            // Actualizar estado de fechas
-            currentDate.value = res.currentDate;
-            dates.value = res.dates;
+            applyInitData(res);
           } else {
             showModal("Error cargando datos: " + res.msg, "Error");
           }
@@ -426,14 +557,24 @@ createApp({
         currentDate.value = dateStr;
         menu.value = allMenus.value[dateStr];
         myOrder.value = allOrders.value[dateStr] || null;
-
-        selection.clear();
-        for (const prop of Object.getOwnPropertyNames(selectionData)) {
-          delete selectionData[prop];
-        }
-        comments.value = '';
+        resetSelectionState();
       } else {
-        loadData(dateStr);
+        loading.value = true;
+        resetSelectionState();
+        google.script.run
+          .withSuccessHandler(res => {
+            loading.value = false;
+            if (res.ok) {
+              applyDateViewData(res);
+            } else {
+              showModal("Error cargando datos de la fecha: " + res.msg, "Error");
+            }
+          })
+          .withFailureHandler(() => {
+            loading.value = false;
+            showModal("Error cargando el menú de la fecha seleccionada.", "Error");
+          })
+          .apiGetDateViewData(dateStr, impersonateEmail.value);
       }
     };
 
@@ -445,7 +586,7 @@ createApp({
         delete selectionData[item.id];
       } else {
         // Single selection rule
-        if (!['Vegetariana', 'Opcion_Rapida'].includes(cat)) {
+        if (!multiSelectCats.includes(cat)) {
            const toRemove = [];
            selection.forEach(id => {
               if (selectionData[id] && selectionData[id].cat === cat) toRemove.push(id);
@@ -479,7 +620,8 @@ createApp({
        }
     };
 
-    const loadAdminData = (force = false) => {
+    const loadAdminData = (force = false, options = {}) => {
+       if (adminState.loading) return;
        if (!force && adminState.users.length > 0) return;
        adminState.loading = true;
        google.script.run
@@ -504,8 +646,12 @@ createApp({
                adminState.departments.forEach(d => map[d.id] = d.nombre);
                adminState.deptMap = map;
             } else {
-               alert(res.msg);
+               if (!options.silent) showModal(res.msg, "Error");
             }
+         })
+         .withFailureHandler(err => {
+            adminState.loading = false;
+            if (!options.silent) showModal(err.message || "Error cargando el panel administrativo.", "Error");
          })
          .apiGetAdminData();
     };
@@ -588,13 +734,15 @@ createApp({
 
     // Config Actions
     const saveConfig = () => {
-       adminState.config['RESPONSIBLES_EMAILS_JSON'] = JSON.stringify(adminState.responsiblesList);
+       const payload = { ...adminState.config };
+       payload['RESPONSIBLES_EMAILS_JSON'] = JSON.stringify(adminState.responsiblesList);
+       delete payload['MEAL_PRICE_HISTORY_JSON'];
        adminState.loading = true;
        google.script.run.withSuccessHandler(res => {
           adminState.loading = false;
           if(res.ok) { adminState.configEdit = false; loadAdminData(true); }
           else showModal(res.msg, "Error");
-       }).apiSaveConfig(adminState.config);
+       }).apiSaveConfig(payload);
     };
 
     // Menu Actions
@@ -651,6 +799,11 @@ createApp({
 
     const saveMenuItem = () => {
        if(!adminState.menuModal.data.plato) return showModal("El nombre del plato es requerido.");
+       const payload = {
+          ...adminState.menuModal.data,
+          plato: formatMenuText(adminState.menuModal.data.plato),
+          desc: formatMenuText(adminState.menuModal.data.desc)
+       };
        adminState.loading = true;
        google.script.run
          .withSuccessHandler(res => {
@@ -662,7 +815,7 @@ createApp({
             adminState.loading = false;
             showModal(err.message, "Error");
          })
-         .apiSaveMenuItem(adminState.menuDate, adminState.menuModal.data.cat, adminState.menuModal.data);
+         .apiSaveMenuItem(adminState.menuDate, payload.cat, payload);
     };
 
     const deleteMenuItem = (id) => {
@@ -750,7 +903,7 @@ createApp({
                 if(cell && !['N/A', 'n/a', 'N/a'].includes(cell)) {
                    if(!columns[idx]) columns[idx] = {};
                    if(!columns[idx][currentCat]) columns[idx][currentCat] = [];
-                   columns[idx][currentCat].push(cell);
+                   columns[idx][currentCat].push(formatMenuText(cell));
                 }
              });
           }
@@ -802,7 +955,7 @@ createApp({
           const items = [];
           Object.keys(day.items).forEach(cat => {
              day.items[cat].forEach(plato => {
-                items.push({ cat, plato });
+                items.push({ cat, plato: formatMenuText(plato) });
              });
           });
           data[day.date] = items;
@@ -904,6 +1057,22 @@ createApp({
       google.script.run.apiDismissBanner();
     };
 
+    const dismissSummaryCostHint = () => {
+      currentUserPrefs.value = {
+        ...currentUserPrefs.value,
+        summary_cost_hint_count: Number(currentUserPrefs.value?.summary_cost_hint_count || 0) + 1
+      };
+      google.script.run.apiDismissSummaryCostHint();
+    };
+
+    const dismissCaldoMultiHint = () => {
+      currentUserPrefs.value = {
+        ...currentUserPrefs.value,
+        caldo_multi_hint_count: Number(currentUserPrefs.value?.caldo_multi_hint_count || 0) + 1
+      };
+      google.script.run.apiDismissCaldoMultiHint();
+    };
+
     const submitOrder = () => {
       if (hasBlockingErrors.value) return;
       
@@ -912,10 +1081,10 @@ createApp({
       // Preparamos el objeto para enviar
       const payload = {
         date: currentDate.value,
+        orderId: myOrder.value?.id || '',
         impersonateEmail: impersonateEmail.value,
         categorias: Array.from(selection).map(id => selectionData[id].cat),
         items: Array.from(selection).map(id => selectionData[id].plato),
-        detalleIds: Array.from(selection),
         comentarios: comments.value
       };
 
@@ -923,7 +1092,15 @@ createApp({
         .withSuccessHandler(res => {
           submitting.value = false;
           if (res.ok) {
-            loadData(currentDate.value); 
+            const nextOrder = res.order || {
+              id: myOrder.value?.id || String(Date.now()),
+              resumen: payload.items.join(', '),
+              detalle: { categorias: payload.categorias, items: payload.items, comentarios: payload.comentarios }
+            };
+            allOrders.value = { ...allOrders.value, [currentDate.value]: nextOrder };
+            myOrder.value = nextOrder;
+            if (res.adminData) adminData.value = res.adminData;
+            resetSelectionState();
           } else {
             showModal("Error: " + res.msg, "Error");
           }
@@ -938,18 +1115,23 @@ createApp({
     const cancelOrder = () => {
       if (!myOrder.value) return;
       showModal("¿Estás seguro de cancelar este pedido?", "Cancelar Pedido", "CONFIRM", () => {
-          loading.value = true;
+          submitting.value = true;
           google.script.run
             .withSuccessHandler(res => {
+               submitting.value = false;
                if (res.ok) {
-                 loadData(currentDate.value);
+                 const nextOrders = { ...allOrders.value };
+                 delete nextOrders[currentDate.value];
+                 allOrders.value = nextOrders;
+                 myOrder.value = null;
+                 if (res.adminData) adminData.value = res.adminData;
+                 resetSelectionState();
                } else {
-                 showModal(res.msg, "Error");
-                 loading.value = false;
+                  showModal(res.msg, "Error");
                }
             })
             .withFailureHandler(() => {
-              loading.value = false;
+              submitting.value = false;
               showModal("Error al cancelar.", "Error");
             })
             .apiCancelOrder(myOrder.value.id);
@@ -1009,12 +1191,15 @@ createApp({
     const formatConfigValue = (key, value) => {
        if (!value) return '';
        if (key.includes('HORA')) {
-          if (value.match(/^\d{1,2}:\d{2}$/)) {
+          if (String(value).match(/^\d{1,2}:\d{2}$/)) {
              const [h, m] = value.split(':');
              const date = new Date();
              date.setHours(h, m);
              return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
           }
+       }
+       if (key === 'MEAL_PRICE_CURRENT') {
+          return formatCurrency(value);
        }
        if (key.includes('MINUTOS')) {
           return value + ' min';
@@ -1041,8 +1226,13 @@ createApp({
     // Inicialización
     onMounted(() => {
       initSummaryDates();
-      loadData(); 
-      startHeartbeat(); // <--- Iniciar aquí
+      const initialData = window.__INITIAL_DATA__;
+      if (initialData && initialData.ok) {
+        applyInitData(initialData);
+        loading.value = false;
+      } else {
+        loadData();
+      }
     });
 
     return {
@@ -1061,12 +1251,12 @@ createApp({
       toggleItem, isSelected, hasSelectionInCat, isCatDisabled, isItemDisabled,
       
       // Estado
-      remindersEnabled, showMultiDayBanner, bannerConfig,
+      remindersEnabled, showMultiDayBanner, bannerConfig, showSummaryCostHint, showCaldoMultiHint, shouldScrollSummaryCards, summaryCostHintEl,
       activeUser, deptUsers, impersonateEmail,
       viewMode, adminState,
 
       // Acciones Principales
-      changeDate, submitOrder, cancelOrder, toggleReminders, dismissBanner, changeProxyUser,
+      changeDate, submitOrder, cancelOrder, toggleReminders, dismissBanner, dismissSummaryCostHint, dismissCaldoMultiHint, changeProxyUser,
       toggleAdminView, loadAdminData,
 
       // Admin Actions
@@ -1088,10 +1278,10 @@ createApp({
       filteredUsers, filteredOrders,
 
       // UI Utils
-      formatCatName, scrollToCat, getIconForCategory, formatConfigValue,
+      formatCatName, scrollToCat, getIconForCategory, formatConfigValue, formatMenuText, formatCurrency,
 
       // Summary
-      userWeeklySummary, summaryHeaders, summaryTitle, resetSummaryDates,
+      userWeeklySummary, summaryHeaders, summaryTitle, resetSummaryDates, userSummaryTotalCost,
 
       // Logo Animation
       logoAnimating, bubbleVisible, bubbleText, triggerLogoAnimation,

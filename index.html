@@ -9,6 +9,9 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <?!= include('css'); ?>
+  <script>
+    window.__INITIAL_DATA__ = <?!= initialDataJson ?>;
+  </script>
 </head>
 <body class="bg-gray-50 text-gray-800 antialiased selection:bg-blue-100 selection:text-blue-800">
   <div id="app" class="min-h-screen flex flex-col">
@@ -127,10 +130,46 @@
 
       <!-- Weekly Summary Dashboard -->
       <div v-if="userWeeklySummary.length > 0" class="space-y-4 animate-fade-in">
-         <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <h3 class="text-lg font-bold text-gray-900 flex items-center gap-2">
-                {{ summaryTitle }}
-            </h3>
+         <div class="flex flex-col xl:flex-row xl:items-start justify-between gap-4">
+            <div class="summary-overview relative">
+               <div class="space-y-3 relative">
+                  <h3 class="text-lg font-bold text-gray-900 flex items-center gap-2">
+                     {{ summaryTitle }}
+                  </h3>
+                  <div class="relative min-h-[92px] md:min-w-[20rem]">
+                     <div class="bg-emerald-50 border border-emerald-100 rounded-2xl px-4 py-3 min-w-[220px] w-fit">
+                        <div class="text-[11px] font-bold uppercase tracking-[0.2em] text-emerald-700/80 mb-1">Costo acumulado</div>
+                        <div class="flex items-center gap-3">
+                           <span class="text-2xl font-black text-emerald-900">{{ formatCurrency(userSummaryTotalCost) }}</span>
+                           <span class="text-[11px] font-bold text-emerald-700 bg-white/80 border border-emerald-100 px-2 py-1 rounded-full">
+                              {{ userWeeklySummary.length }} almuerzos
+                           </span>
+                        </div>
+                     </div>
+                     <div
+                        v-if="showSummaryCostHint"
+                        ref="summaryCostHintEl"
+                        tabindex="-1"
+                        class="feature-hint-popover summary-cost-popover mt-3 md:mt-0"
+                     >
+                        <div class="flex items-start gap-2.5">
+                           <div class="feature-hint-badge">
+                              <i class="fa-solid fa-sparkles"></i>
+                           </div>
+                           <div class="min-w-0 flex-1">
+                              <div class="feature-hint-title">Nuevo: costo acumulado</div>
+                              <p class="feature-hint-text">
+                                 Suma el precio vigente por fecha de cada almuerzo filtrado.
+                              </p>
+                           </div>
+                           <button @click="dismissSummaryCostHint" class="feature-hint-close" title="Ocultar ayuda">
+                              <i class="fa-solid fa-xmark"></i>
+                           </button>
+                        </div>
+                     </div>
+                  </div>
+               </div>
+            </div>
             <div class="flex items-center gap-3">
                <span class="text-xs font-bold text-gray-400 uppercase tracking-wider hidden md:inline-block">Filtrar por fecha:</span>
                <div class="flex gap-2 items-center bg-white p-1 rounded-lg border border-gray-200 shadow-sm">
@@ -143,11 +182,15 @@
                </button>
             </div>
          </div>
+         <div :class="['summary-cards-grid', shouldScrollSummaryCards ? 'summary-cards-grid-scroll' : '']">
          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <div v-for="row in userWeeklySummary" :key="row.date" class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden hover:shadow-md transition-all">
                 <div class="bg-gray-50 px-4 py-3 border-b border-gray-100 flex justify-between items-center">
                     <span class="font-bold text-gray-800 text-sm">{{ row.label }}</span>
-                    <i class="fa-solid fa-circle-check text-green-500 text-sm"></i>
+                    <div class="flex items-center gap-2">
+                       <span class="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 px-2 py-1 rounded-full">{{ formatCurrency(row.mealPrice) }}</span>
+                       <i class="fa-solid fa-circle-check text-green-500 text-sm"></i>
+                    </div>
                 </div>
                 <div class="p-4 space-y-2">
                    <div v-for="(val, cat) in row.items" :key="cat" class="flex gap-2 items-start text-xs">
@@ -155,11 +198,12 @@
                          <i :class="getIconForCategory(cat)"></i>
                       </div>
                       <div class="text-gray-600">
-                         <span class="font-semibold text-gray-900">{{ formatCatName(cat) }}:</span> {{ val }}
+                         <span class="font-semibold text-gray-900">{{ formatCatName(cat) }}:</span> {{ formatMenuText(val) }}
                       </div>
                    </div>
                 </div>
             </div>
+         </div>
          </div>
       </div>
 
@@ -227,14 +271,15 @@
               <div class="text-left">
                  <label class="text-xs text-gray-400 uppercase font-bold tracking-wider mb-2 block">Resumen del pedido</label>
                  <div class="bg-gray-50 p-5 rounded-2xl text-sm text-gray-700 font-medium leading-relaxed border border-gray-100">
-                    {{ myOrder.resumen }}
+                    {{ formatMenuText(myOrder.resumen) }}
                  </div>
               </div>
            </div>
 
            <div class="mt-8">
-              <button v-if="!isCutoffPassed" @click="cancelOrder" class="w-full py-4 rounded-xl border-2 border-red-50 text-red-500 font-bold hover:bg-red-50 hover:border-red-100 transition-colors text-sm flex items-center justify-center gap-2 group">
-                 <i class="fa-solid fa-trash-can opacity-70 group-hover:opacity-100"></i> Cancelar o modificar
+              <button v-if="!isCutoffPassed" @click="cancelOrder" :disabled="submitting" class="w-full py-4 rounded-xl border-2 border-red-50 text-red-500 font-bold hover:bg-red-50 hover:border-red-100 disabled:opacity-60 disabled:cursor-not-allowed transition-colors text-sm flex items-center justify-center gap-2 group">
+                 <span v-if="submitting"><i class="fa-solid fa-circle-notch fa-spin"></i> Procesando...</span>
+                 <span v-else><i class="fa-solid fa-trash-can opacity-70 group-hover:opacity-100"></i> Cancelar o modificar</span>
               </button>
            </div>
         </div>
@@ -269,28 +314,49 @@
           </div>
 
           <!-- Category Sections -->
-          <div v-for="cat in categories" :key="cat" :id="'cat-'+cat" class="scroll-mt-36">
-            <h3 class="text-lg font-bold text-gray-900 mb-4 flex items-center">
-              {{ formatCatName(cat) }}
-              <span v-if="isCatDisabled(cat)" class="ml-3 text-[10px] uppercase font-bold text-red-500 bg-red-50 px-2 py-1 rounded-md tracking-wide">No disponible</span>
-            </h3>
-            
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div v-for="item in menu[cat]" :key="item.id" 
-                   @click="toggleItem(cat, item)"
-                   :class="['group relative bg-white p-5 rounded-2xl shadow-sm hover:shadow-md transition-all duration-300 border cursor-pointer flex justify-between gap-4',
-                     isSelected(item.id) ? 'ring-2 ring-blue-600 border-transparent bg-blue-50/10' : 'border-gray-100 hover:border-gray-200',
-                     isItemDisabled(cat, item) ? 'opacity-50 pointer-events-none grayscale bg-gray-50' : ''
-                   ]">
-                <div class="flex-grow">
-                  <div class="font-bold text-gray-900 text-base mb-1 group-hover:text-blue-700 transition-colors">{{ item.plato }}</div>
-                  <div class="text-sm text-gray-500 leading-relaxed">{{ item.desc }}</div>
-                </div>
-                <div class="flex-shrink-0 pt-1">
-                   <div :class="['w-8 h-8 rounded-full flex items-center justify-center transition-all duration-300 transform',
-                     isSelected(item.id) ? 'bg-blue-600 text-white scale-110 shadow-lg shadow-blue-500/30' : 'bg-gray-100 text-gray-400 group-hover:bg-blue-100 group-hover:text-blue-600']">
-                      <i :class="isSelected(item.id) ? 'fa-solid fa-check' : 'fa-solid fa-plus'"></i>
-                   </div>
+          <div v-for="cat in categories" :key="cat" :id="'cat-'+cat" class="scroll-mt-36 relative">
+            <div class="relative">
+              <h3 class="text-lg font-bold text-gray-900 mb-4 flex items-center">
+                {{ formatCatName(cat) }}
+                <span v-if="isCatDisabled(cat)" class="ml-3 text-[10px] uppercase font-bold text-red-500 bg-red-50 px-2 py-1 rounded-md tracking-wide">No disponible</span>
+              </h3>
+
+              <div
+                v-if="cat === 'Caldo' && showCaldoMultiHint"
+                class="feature-hint-popover caldo-hint-popover mb-4 md:mb-5"
+              >
+                 <div class="flex items-start gap-2.5">
+                    <div class="feature-hint-badge caldo-hint-badge">
+                       <i class="fa-solid fa-layer-group"></i>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                       <div class="feature-hint-title">Caldo ahora es múltiple</div>
+                       <p class="feature-hint-text">
+                          Ya puedes elegir más de una opción en esta categoría.
+                       </p>
+                    </div>
+                    <button @click="dismissCaldoMultiHint" class="feature-hint-close" title="Ocultar ayuda">
+                       <i class="fa-solid fa-xmark"></i>
+                    </button>
+                 </div>
+              </div>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div v-for="item in menu[cat]" :key="item.id"
+                     @click="toggleItem(cat, item)"
+                     :class="['group relative bg-white p-5 rounded-2xl shadow-sm hover:shadow-md transition-all duration-300 border cursor-pointer flex justify-between gap-4',
+                       isSelected(item.id) ? 'ring-2 ring-blue-600 border-transparent bg-blue-50/10' : 'border-gray-100 hover:border-gray-200',
+                       isItemDisabled(cat, item) ? 'opacity-50 pointer-events-none grayscale bg-gray-50' : ''
+                     ]">
+                  <div class="flex-grow">
+                    <div class="font-bold text-gray-900 text-base mb-1 group-hover:text-blue-700 transition-colors">{{ formatMenuText(item.plato) }}</div>
+                    <div class="text-sm text-gray-500 leading-relaxed">{{ formatMenuText(item.desc) }}</div>
+                  </div>
+                  <div class="flex-shrink-0 pt-1">
+                     <div :class="['w-8 h-8 rounded-full flex items-center justify-center transition-all duration-300 transform',
+                       isSelected(item.id) ? 'bg-blue-600 text-white scale-110 shadow-lg shadow-blue-500/30' : 'bg-gray-100 text-gray-400 group-hover:bg-blue-100 group-hover:text-blue-600']">
+                        <i :class="isSelected(item.id) ? 'fa-solid fa-check' : 'fa-solid fa-plus'"></i>
+                     </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -464,7 +530,7 @@
                            <div class="text-xs text-gray-400">{{ o.email }}</div>
                         </td>
                         <td class="p-3 text-gray-600 text-xs font-medium">{{ o.dept }}</td>
-                        <td class="p-3 text-gray-600">{{ o.resumen }}</td>
+                           <td class="p-3 text-gray-600">{{ formatMenuText(o.resumen) }}</td>
                         <td class="p-3 text-xs text-gray-400">{{ o.creado_por === o.email ? '(Mismo)' : o.creado_por }}</td>
                         <td class="p-3"><span class="bg-blue-50 text-blue-700 px-2 py-1 rounded text-xs font-bold">{{ o.estado }}</span></td>
                         <td class="p-3">
@@ -526,7 +592,7 @@
 
                <!-- Customized Inputs for specific keys -->
                <div class="grid gap-4 md:grid-cols-2">
-                  <div v-for="item in adminState.configList" :key="item.key" v-show="item.key !== 'RESPONSIBLES_EMAILS_JSON'" class="bg-gray-50 p-4 rounded-xl border border-gray-200">
+                  <div v-for="item in adminState.configList" :key="item.key" v-show="item.key !== 'RESPONSIBLES_EMAILS_JSON' && item.key !== 'MEAL_PRICE_HISTORY_JSON'" class="bg-gray-50 p-4 rounded-xl border border-gray-200">
                      <div class="flex justify-between items-start mb-2">
                         <div class="text-xs font-bold text-gray-500 uppercase tracking-wider">{{ item.key }}</div>
                         <div class="text-[10px] text-gray-400 max-w-[50%] text-right leading-tight">{{ item.desc }}</div>
@@ -537,6 +603,7 @@
                      </div>
                      <div v-else>
                         <input v-if="item.key === 'HORA_ENVIO' || item.key === 'HORA_RECORDATORIO'" type="time" v-model="adminState.config[item.key]" class="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500">
+                        <input v-else-if="item.key === 'MEAL_PRICE_CURRENT'" type="number" min="0" step="0.01" v-model="adminState.config[item.key]" class="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500">
                         <input v-else-if="item.key.includes('LIMIT') || item.key.includes('MINUTOS')" type="number" v-model="adminState.config[item.key]" class="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500">
                         <input v-else type="text" v-model="adminState.config[item.key]" class="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500">
                      </div>
@@ -607,8 +674,8 @@
                   <div class="divide-y divide-gray-100">
                      <div v-for="item in adminState.menuItems.filter(i => i.cat === cat)" :key="item.id" class="p-4 flex justify-between items-start hover:bg-gray-50/50 group">
                         <div>
-                           <div class="font-bold text-sm text-gray-900">{{ item.plato }}</div>
-                           <div class="text-xs text-gray-500">{{ item.desc }}</div>
+                           <div class="font-bold text-sm text-gray-900">{{ formatMenuText(item.plato) }}</div>
+                           <div class="text-xs text-gray-500">{{ formatMenuText(item.desc) }}</div>
                         </div>
                         <div class="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                            <button @click="openMenuModal(item, cat)" class="text-gray-400 hover:text-blue-600"><i class="fa-solid fa-pen"></i></button>
@@ -852,7 +919,7 @@
                              <td class="p-3 font-bold text-gray-900 bg-gray-50 sticky left-0 border-r border-gray-200 z-10">{{ formatCatName(cat) }}</td>
                              <td v-for="d in adminState.menuImportModal.preview" :key="d.date" class="p-3 align-top">
                                 <ul v-if="d.items[cat] && d.items[cat].length" class="list-disc list-inside text-gray-600">
-                                   <li v-for="item in d.items[cat]" :key="item">{{ item }}</li>
+                                   <li v-for="item in d.items[cat]" :key="item">{{ formatMenuText(item) }}</li>
                                 </ul>
                                 <span v-else class="text-gray-300 italic">-</span>
                              </td>
