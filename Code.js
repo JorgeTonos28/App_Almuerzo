@@ -1,20 +1,19 @@
 /**
  * Code.gs - Backend V5 (Refactor & New Features)
  */
-const APP_VERSION = 'v7.0';
+const APP_VERSION = 'v7.8';
 
 // === RUTAS E INICIO ===
 
 function doGet(e) {
   const t = HtmlService.createTemplateFromFile('index');
   const user = getUserInfo_();
-
-  // Inyectar firma
-  t.signatureUrl = getSignatureDataUrl_();
+  t.signatureUrl = '';
+  t.initialDataJson = 'null';
 
   if (!user || user.estado !== 'ACTIVO') {
     const denied = HtmlService.createTemplateFromFile('Denied');
-    denied.signatureUrl = t.signatureUrl;
+    denied.signatureUrl = getSignatureDataUrl_();
     denied.email = Session.getActiveUser().getEmail().toLowerCase();
     denied.status = user && user.estado ? user.estado.trim().toUpperCase() : null;
     return denied.evaluate()
@@ -25,6 +24,8 @@ function doGet(e) {
 
   t.user = user;
   t.appVersion = APP_VERSION;
+  t.signatureUrl = getSignatureDataUrl_();
+  t.initialDataJson = serializeForInlineScript_(apiGetInitData());
 
   return t.evaluate()
     .setTitle('Solicitud Almuerzo')
@@ -36,18 +37,24 @@ function include(filename) {
   return HtmlService.createHtmlOutputFromFile(filename).getContent();
 }
 
+function serializeForInlineScript_(value) {
+  return JSON.stringify(value)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026');
+}
+
 // === API PÚBLICA ===
 
 function apiGetInitData(requestedDateStr, impersonateEmail) {
   try {
-    // 1. Prefetch Data to reduce latency
     const ss = SpreadsheetApp.getActive();
-    const menuData = ss.getSheetByName('Menu').getDataRange().getValues();
-    const ordersData = ss.getSheetByName('Pedidos').getDataRange().getValues();
-    const usersData = ss.getSheetByName('Usuarios').getDataRange().getValues();
+    const usersData = readSheetValues_(ss.getSheetByName('Usuarios'), 7);
+    const deptMap = getDepartmentMap_();
 
-    const activeUser = getUserInfo_(null, usersData);
+    const activeUser = getUserInfo_(null, usersData, deptMap);
     if (!activeUser) throw new Error("Usuario no encontrado.");
+    ensureOperationalConfigKeys_();
 
     let targetUser = activeUser;
     let deptUsers = [];
@@ -58,14 +65,21 @@ function apiGetInitData(requestedDateStr, impersonateEmail) {
        deptUsers = getUsersByDept_(activeUser.departamentoId, usersData).filter(u => u.email.toLowerCase() !== activeUser.email.toLowerCase());
 
        if (impersonateEmail && impersonateEmail !== activeUser.email) {
-          const checkUser = getUserInfo_(impersonateEmail, usersData);
+          const checkUser = getUserInfo_(impersonateEmail, usersData, deptMap);
           if (checkUser && checkUser.departamentoId === activeUser.departamentoId) {
              targetUser = checkUser;
           }
        }
     }
 
-    const availableDates = getAvailableMenuDates_(true, menuData);
+    const initCacheKey = getInitCacheKey_(activeUser.email, targetUser.email, requestedDateStr || '');
+    const cachedResponse = readJsonCache_(initCacheKey);
+    if (cachedResponse) {
+      return cachedResponse;
+    }
+
+    const menuBundle = getMenuBundle_();
+    const availableDates = menuBundle.dates || [];
 
     let targetDateStr = requestedDateStr;
     if (availableDates.length > 0) {
@@ -76,15 +90,16 @@ function apiGetInitData(requestedDateStr, impersonateEmail) {
        targetDateStr = null;
     }
 
-    const allMenus = getAllMenus_(availableDates, menuData);
-    const allOrders = getAllUserOrders_(targetUser.email, availableDates, ordersData);
+    const ordersData = readSheetValues_(ss.getSheetByName('Pedidos'), 9);
+    const allMenus = menuBundle.menusByDate || {};
+    const menu = targetDateStr ? (allMenus[targetDateStr] || {}) : {};
+    const allOrders = getAllUserOrders_(targetUser.email, null, ordersData);
 
-    const menu = allMenus[targetDateStr] || {};
     const existingOrder = allOrders[targetDateStr] || null;
 
     let adminSummary = null;
     if (activeUser.rol === 'ADMIN_GEN' || activeUser.rol === 'ADMIN_DEP') {
-      adminSummary = getDepartmentStats_(targetDateStr, (activeUser.rol === 'ADMIN_GEN' ? null : activeUser.departamentoId), ordersData);
+      adminSummary = getDepartmentStats_(targetDateStr, (activeUser.rol === 'ADMIN_GEN' ? null : activeUser.departamentoId), ordersData, deptMap);
     }
 
     const prefs = getUserPrefs_(targetUser.email, usersData);
@@ -92,10 +107,14 @@ function apiGetInitData(requestedDateStr, impersonateEmail) {
     // Get Banner Text from Config
     const bannerText = getConfigValue_('PLAN_WEEK_TEXT') || 'Planifica tu semana';
     const bannerLimit = parseInt(getConfigValue_('PLAN_WEEK_LIMIT') || '5', 10);
+    const mealPriceCurrent = getCurrentMealPrice_();
+    const mealPriceHistory = getMealPriceHistory_();
+    const hintConfig = getHintConfig_();
+    const todayYmd = getTodayYmd_();
 
     const nextBizDay = getNextBusinessDay_(new Date());
 
-    return {
+    const response = {
       ok: true,
       nextBusinessDay: formatDate_(nextBizDay),
       user: targetUser,
@@ -110,9 +129,66 @@ function apiGetInitData(requestedDateStr, impersonateEmail) {
       myOrder: existingOrder,
       adminData: adminSummary,
       bannerConfig: { text: bannerText, limit: bannerLimit },
-      deptMap: getDepartmentMap_()
+      mealPricing: { current: mealPriceCurrent, history: mealPriceHistory },
+      hintConfig: hintConfig,
+      todayYmd: todayYmd,
+      deptMap: deptMap
     };
 
+    writeJsonCache_(initCacheKey, response, 45);
+    return response;
+
+  } catch (e) {
+    return { ok: false, msg: e.message };
+  }
+}
+
+function apiGetDateViewData(requestedDateStr, impersonateEmail) {
+  try {
+    if (!requestedDateStr) throw new Error("Fecha requerida.");
+
+    const ss = SpreadsheetApp.getActive();
+    const usersData = readSheetValues_(ss.getSheetByName('Usuarios'), 7);
+    const deptMap = getDepartmentMap_();
+    const activeUser = getUserInfo_(null, usersData, deptMap);
+    if (!activeUser) throw new Error("Usuario no encontrado.");
+    ensureOperationalConfigKeys_();
+
+    let targetUser = activeUser;
+    if (activeUser.rol === 'ADMIN_DEP' && impersonateEmail && impersonateEmail !== activeUser.email) {
+      const checkUser = getUserInfo_(impersonateEmail, usersData, deptMap);
+      if (checkUser && checkUser.departamentoId === activeUser.departamentoId) {
+        targetUser = checkUser;
+      }
+    }
+
+    const cacheKey = getDateViewCacheKey_(activeUser.email, targetUser.email, requestedDateStr);
+    const cachedResponse = readJsonCache_(cacheKey);
+    if (cachedResponse) return cachedResponse;
+
+    const menuBundle = getMenuBundle_();
+    if (!menuBundle.dates.some(d => d.value === requestedDateStr)) {
+      throw new Error("La fecha solicitada ya no está disponible.");
+    }
+
+    const ordersData = readSheetValues_(ss.getSheetByName('Pedidos'), 9);
+    const myOrder = getUserOrderByDate_(targetUser.email, requestedDateStr, ordersData);
+
+    let adminSummary = null;
+    if (activeUser.rol === 'ADMIN_GEN' || activeUser.rol === 'ADMIN_DEP') {
+      adminSummary = getDepartmentStats_(requestedDateStr, (activeUser.rol === 'ADMIN_GEN' ? null : activeUser.departamentoId), ordersData, deptMap);
+    }
+
+    const response = {
+      ok: true,
+      currentDate: requestedDateStr,
+      menu: menuBundle.menusByDate[requestedDateStr] || {},
+      myOrder: myOrder,
+      adminData: adminSummary
+    };
+
+    writeJsonCache_(cacheKey, response, 45);
+    return response;
   } catch (e) {
     return { ok: false, msg: e.message };
   }
@@ -183,17 +259,21 @@ function apiRequestAccess(data) {
      });
      sendEmail_(email, "Almuerzo Pre-empacado | Solicitud Recibida", userHtml);
 
+     invalidateUserInitCache_();
      return { ok: true };
   } catch(e) { return { ok: false, msg: e.message }; }
 }
 
 function apiSubmitOrder(payload) {
   try {
-    const activeUser = getUserInfo_();
+    const ss = SpreadsheetApp.getActive();
+    const usersData = readSheetValues_(ss.getSheetByName('Usuarios'), 7);
+    const activeUser = getUserAccessRecord_(null, usersData);
+    if (!activeUser) throw new Error("Usuario no encontrado.");
     let targetUser = activeUser;
 
     if (payload.impersonateEmail && activeUser.rol === 'ADMIN_DEP') {
-       const checkUser = getUserInfo_(payload.impersonateEmail);
+       const checkUser = getUserAccessRecord_(payload.impersonateEmail, usersData);
        if (checkUser && checkUser.departamentoId === activeUser.departamentoId) {
           targetUser = checkUser;
        } else {
@@ -207,31 +287,33 @@ function apiSubmitOrder(payload) {
     }
 
     validateOrderRules_(payload);
-    saveOrderToSheet_(targetUser, dateStr, payload, activeUser.email);
-
-    return { ok: true };
+    const savedOrder = saveOrderToSheet_(targetUser, dateStr, payload, activeUser.email);
+    invalidateUserInitCache_();
+    return { ok: true, order: savedOrder };
   } catch (e) {
     return { ok: false, msg: e.message };
   }
 }
 
 function apiCancelOrder(orderId) {
-  const ss = SpreadsheetApp.getActive();
-  const sh = ss.getSheetByName('Pedidos');
-  const rows = sh.getDataRange().getValues();
-  const user = getUserInfo_();
+  try {
+    const activeEmail = Session.getActiveUser().getEmail().toLowerCase();
 
-  for (let i = 1; i < rows.length; i++) {
-    if (String(rows[i][0]) === String(orderId) && String(rows[i][3]).toLowerCase() === user.email.toLowerCase()) {
-      const orderDate = formatDate_(new Date(rows[i][2]));
-      if (!isDateOpenForOrdering_(orderDate)) {
-        return { ok: false, msg: "Ya no puedes cancelar este pedido (hora de cierre pasada)." };
-      }
-      sh.deleteRow(i + 1);
-      return { ok: true };
+    const result = cancelOrderRecordById_(orderId, function(orderSnapshot) {
+      return String(orderSnapshot.email).toLowerCase() === activeEmail;
+    });
+
+    if (!result.found) return { ok: false, msg: "Pedido no encontrado." };
+    if (!result.allowed) return { ok: false, msg: "No tienes permiso para cancelar este pedido." };
+    if (!isDateOpenForOrdering_(result.date)) {
+      return { ok: false, msg: "Ya no puedes cancelar este pedido (hora de cierre pasada)." };
     }
+
+    invalidateUserInitCache_();
+    return { ok: true, date: result.date };
+  } catch (e) {
+    return { ok: false, msg: e.message };
   }
-  return { ok: false, msg: "Pedido no encontrado." };
 }
 
 function apiSetUserPreference(key, value, targetEmail) {
@@ -263,6 +345,7 @@ function apiSetUserPreference(key, value, targetEmail) {
         const currentPrefs = JSON.parse(data[i][5] || '{}');
         currentPrefs[key] = value;
         sh.getRange(i + 1, 6).setValue(JSON.stringify(currentPrefs));
+        invalidateUserInitCache_();
         return { ok: true };
       }
     }
@@ -278,6 +361,22 @@ function apiDismissBanner() {
    let count = prefs.banner_count || 0;
    count++;
    return apiSetUserPreference('banner_count', count);
+}
+
+function apiDismissSummaryCostHint() {
+   const user = getUserInfo_();
+   const prefs = getUserPrefs_(user.email);
+   let count = prefs.summary_cost_hint_count || 0;
+   count++;
+   return apiSetUserPreference('summary_cost_hint_count', count);
+}
+
+function apiDismissCaldoMultiHint() {
+   const user = getUserInfo_();
+   const prefs = getUserPrefs_(user.email);
+   let count = prefs.caldo_multi_hint_count || 0;
+   count++;
+   return apiSetUserPreference('caldo_multi_hint_count', count);
 }
 // === AUTOMATIZACIÓN (TRIGGERS) ===
 
@@ -523,6 +622,10 @@ function apiGetAdminData() {
       return { ok: false, msg: "Acceso denegado." };
     }
 
+    const cacheKey = getAdminCacheKey_(user);
+    const cached = readJsonCache_(cacheKey);
+    if (cached && cached.ok) return cached;
+
     const data = { ok: true, rol: user.rol, dept: user.departamentoId }; // Send ID
     const deptMap = getDepartmentMap_();
 
@@ -539,6 +642,7 @@ function apiGetAdminData() {
     data.orders = pSh.getDataRange().getValues().slice(1)
       .filter(r => {
          if (!r[2]) return false;
+         if (String(r[8]).toUpperCase() === 'CANCELADO') return false;
          try {
             const d = new Date(r[2]);
             if (isNaN(d.getTime())) return false;
@@ -555,7 +659,7 @@ function apiGetAdminData() {
 
     // Config & Holidays (Admin Gen only)
     if (user.rol === 'ADMIN_GEN') {
-       ensureConfigKey_('LOGO_ID', '', 'ID del archivo de imagen del Logo en Drive');
+       ensureOperationalConfigKeys_();
        ensureConfigKey_('APP_URL', ScriptApp.getService().getUrl(), 'URL pública de la aplicación (Web App)');
        data.config = getConfigValue_('ALL');
        for (const k in data.config) {
@@ -586,6 +690,7 @@ function apiGetAdminData() {
 
     data.departments = getDepartmentsList_(); // Returns {id, nombre...}
 
+    writeJsonCache_(cacheKey, data, 45);
     return data;
   } catch (e) {
     return { ok: false, msg: e.message };
@@ -597,21 +702,37 @@ function apiSaveConfig(configData) {
      const admin = getUserInfo_();
      if (!admin || admin.rol !== 'ADMIN_GEN') throw new Error("Permiso denegado.");
 
+     ensureOperationalConfigKeys_();
      const ss = SpreadsheetApp.getActive();
      const sh = ss.getSheetByName('Config');
      const data = sh.getDataRange().getValues();
 
      let timeChanged = false;
+     const currentMealPrice = getCurrentMealPrice_();
+     const currentMealPriceHistory = getMealPriceHistory_();
+     const hasIncomingMealPrice = configData.MEAL_PRICE_CURRENT !== undefined;
+     const normalizedMealPrice = hasIncomingMealPrice ? normalizeMealPriceValue_(configData.MEAL_PRICE_CURRENT) : currentMealPrice;
+     const mealPriceChanged = hasIncomingMealPrice && normalizedMealPrice !== currentMealPrice;
+     let mealPriceHistoryRow = -1;
 
      for(let i=1; i<data.length; i++) {
         const key = String(data[i][0]);
+        if (key === 'MEAL_PRICE_HISTORY_JSON') {
+           mealPriceHistoryRow = i + 1;
+           continue;
+        }
         if (configData[key] !== undefined) {
-           const val = configData[key];
+           const val = key === 'MEAL_PRICE_CURRENT' ? normalizedMealPrice : configData[key];
            if ((key === 'HORA_RECORDATORIO' || key === 'HORA_ENVIO') && String(data[i][1]) !== String(val)) {
               timeChanged = true;
            }
            sh.getRange(i+1, 2).setValue(val);
         }
+     }
+
+     if (mealPriceChanged && mealPriceHistoryRow > 0) {
+        const nextHistory = upsertMealPriceHistory_(currentMealPriceHistory, normalizedMealPrice, getTodayYmd_());
+        sh.getRange(mealPriceHistoryRow, 2).setValue(JSON.stringify(nextHistory));
      }
      _configCache = null;
 
@@ -619,6 +740,8 @@ function apiSaveConfig(configData) {
         reinstallTimeTriggers_();
      }
 
+     invalidateMenuDataCache_();
+     invalidateUserInitCache_();
      return { ok: true };
    } catch (e) { return { ok: false, msg: e.message }; }
 }
@@ -708,6 +831,7 @@ function apiDeleteDepartment(deptId) {
      for(let i=1; i<data.length; i++) {
         if (String(data[i][0]) === String(deptId)) {
            sh.deleteRow(i+1);
+           invalidateUserInitCache_();
            return { ok: true };
         }
      }
@@ -779,6 +903,7 @@ function apiAdminSaveUser(userData) {
      sendEmail_(userData.email, "Almuerzo Pre-empacado | Acceso Aprobado", html);
   }
 
+  invalidateUserInitCache_();
   return { ok: true };
 }
 
@@ -792,6 +917,7 @@ function apiAdminDeleteUser(email) {
       if (String(data[i][0]).toLowerCase() === String(email).toLowerCase()) {
          if (admin.rol === 'ADMIN_DEP' && data[i][2] !== admin.departamentoId) throw new Error("Denegado");
          sh.getRange(i+1, 5).setValue('INACTIVO');
+         invalidateUserInitCache_();
          return { ok: true };
       }
    }
@@ -799,22 +925,19 @@ function apiAdminDeleteUser(email) {
 }
 
 function apiAdminCancelOrder(orderId) {
-  const admin = getUserInfo_();
+  const usersData = readSheetValues_(SpreadsheetApp.getActive().getSheetByName('Usuarios'), 7);
+  const admin = getUserAccessRecord_(null, usersData);
   if (!admin || !['ADMIN_GEN', 'ADMIN_DEP'].includes(admin.rol)) throw new Error("Permiso denegado.");
-  const ss = SpreadsheetApp.getActive();
-  const sh = ss.getSheetByName('Pedidos');
-  const rows = sh.getDataRange().getValues();
-  for (let i = 1; i < rows.length; i++) {
-    if (String(rows[i][0]) === String(orderId)) {
-       const orderDeptId = rows[i][5];
-       if (admin.rol === 'ADMIN_DEP' && orderDeptId !== admin.departamentoId) {
-          throw new Error("Denegado: Pedido de otro departamento.");
-       }
-       sh.deleteRow(i + 1);
-       return { ok: true };
-    }
-  }
-  return { ok: false, msg: "Pedido no encontrado." };
+
+  const result = cancelOrderRecordById_(orderId, function(orderSnapshot) {
+    return admin.rol === 'ADMIN_GEN' || orderSnapshot.departamentoId === admin.departamentoId;
+  });
+
+  if (!result.found) return { ok: false, msg: "Pedido no encontrado." };
+  if (!result.allowed) throw new Error("Denegado: Pedido de otro departamento.");
+
+  invalidateUserInitCache_();
+  return { ok: true };
 }
 
 // === MENU MANAGEMENT API ===
@@ -835,7 +958,13 @@ function apiGetMenuDay(dateStr) {
       let dObj = (typeof raw === 'string' && raw.match(/^\d{4}-\d{2}-\d{2}$/)) ? new Date(raw + 'T12:00:00') : new Date(raw);
       const rowDate = formatDate_(dObj);
       if (rowDate === fDate) {
-         items.push({ id: data[i][0], cat: data[i][2], plato: data[i][3], desc: data[i][4], hab: data[i][5] });
+         items.push({
+           id: data[i][0],
+           cat: data[i][2],
+           plato: normalizeMenuText_(data[i][3]),
+           desc: normalizeMenuText_(data[i][4]),
+           hab: data[i][5]
+         });
       }
    }
    return { ok: true, items: items };
@@ -862,11 +991,13 @@ function apiSaveMenuItem(dateStr, cat, itemData) {
    const id = rowIdx > 0 ? itemData.id : Utilities.getUuid();
    // Save as Date object (local)
    const dateObj = new Date(dateStr + 'T12:00:00');
-   const row = [id, dateObj, cat, itemData.plato, itemData.desc, 'SI'];
+   const row = [id, dateObj, cat, normalizeMenuText_(itemData.plato), normalizeMenuText_(itemData.desc), 'SI'];
 
    if (rowIdx > 0) sh.getRange(rowIdx, 1, 1, row.length).setValues([row]);
    else sh.appendRow(row);
 
+   invalidateMenuDataCache_();
+   invalidateUserInitCache_();
    return { ok: true };
 }
 
@@ -878,6 +1009,8 @@ function apiDeleteMenuItem(id) {
    for(let i=1; i<data.length; i++) {
       if (String(data[i][0]) === String(id)) {
          sh.deleteRow(i+1);
+         invalidateMenuDataCache_();
+         invalidateUserInitCache_();
          return { ok: true };
       }
    }
@@ -920,7 +1053,14 @@ function apiSaveWeeklyMenu(menuData) {
          const items = menuData[dateKey] || [];
          const dateObj = new Date(normalizedDate + 'T12:00:00');
          items.forEach(item => {
-            allNewRows.push([Utilities.getUuid(), dateObj, item.cat, item.plato, item.desc || '', 'SI']);
+            allNewRows.push([
+              Utilities.getUuid(),
+              dateObj,
+              item.cat,
+              normalizeMenuText_(item.plato),
+              normalizeMenuText_(item.desc || ''),
+              'SI'
+            ]);
          });
       }
    });
@@ -930,6 +1070,8 @@ function apiSaveWeeklyMenu(menuData) {
       sh.getRange(sh.getLastRow() + 1, 1, allNewRows.length, allNewRows[0].length).setValues(allNewRows);
    }
 
+   invalidateMenuDataCache_();
+   invalidateUserInitCache_();
    return { ok: true };
 }
 
@@ -960,6 +1102,8 @@ function apiSaveHoliday(dateStr, desc) {
    }
    sh.appendRow([dateStr, desc]);
    CacheService.getScriptCache().remove('HOLIDAYS_CACHE_V2');
+   invalidateMenuDataCache_();
+   invalidateUserInitCache_();
    return { ok: true };
 }
 
@@ -972,6 +1116,8 @@ function apiDeleteHoliday(dateStr) {
       if (formatDate_(new Date(data[i][0])) === dateStr) {
          sh.deleteRow(i+1);
          CacheService.getScriptCache().remove('HOLIDAYS_CACHE_V2');
+         invalidateMenuDataCache_();
+         invalidateUserInitCache_();
          return { ok: true };
       }
    }
@@ -1028,10 +1174,10 @@ function apiHeartbeat() {
   return { count: null };
 }
 
-function getUserInfo_(targetEmail, usersData) {
+function getUserInfo_(targetEmail, usersData, deptMap) {
   const email = targetEmail ? targetEmail.toLowerCase() : Session.getActiveUser().getEmail().toLowerCase();
   const data = usersData || SpreadsheetApp.getActive().getSheetByName('Usuarios').getDataRange().getValues();
-  const deptMap = getDepartmentMap_();
+  const currentDeptMap = deptMap || getDepartmentMap_();
 
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][0]).toLowerCase() === email) {
@@ -1040,7 +1186,7 @@ function getUserInfo_(targetEmail, usersData) {
         email: data[i][0],
         nombre: data[i][1],
         departamentoId: deptId,
-        departamento: deptMap[deptId] || deptId, // Resolve name
+        departamento: currentDeptMap[deptId] || deptId, // Resolve name
         rol: data[i][3],
         estado: data[i][4],
         codigo: data[i][6] || ''
@@ -1052,20 +1198,20 @@ function getUserInfo_(targetEmail, usersData) {
 
 function getDepartmentMap_() {
    const sh = SpreadsheetApp.getActive().getSheetByName('Departamentos');
-   const map = {};
-   if (sh) {
-      const data = sh.getDataRange().getValues();
+  const map = {};
+  if (sh) {
+      const data = readSheetValues_(sh, 2);
       for(let i=1; i<data.length; i++) {
          map[data[i][0]] = data[i][1]; // ID -> Name
       }
    }
-   return map;
+  return map;
 }
 
 function getDepartmentsList_() {
    const sh = SpreadsheetApp.getActive().getSheetByName('Departamentos');
    if (!sh) return [];
-   const data = sh.getDataRange().getValues();
+  const data = readSheetValues_(sh, 4);
    return data.slice(1).map(r => ({ id: r[0], nombre: r[1], admins: r[2], estado: r[3] }));
 }
 
@@ -1156,6 +1302,100 @@ function backupOrdersToDrive_(dateStr) {
 
 // Helpers reused...
 let _configCache = null;
+const OPERATIONAL_CONFIG_SCHEMA_CACHE_KEY = 'CONFIG_SCHEMA_READY_V2';
+
+function readSheetValues_(sheet, columnCount) {
+  if (!sheet) return [];
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 1) return [];
+  const totalColumns = columnCount || sheet.getLastColumn();
+  if (totalColumns < 1) return [];
+  return sheet.getRange(1, 1, lastRow, totalColumns).getValues();
+}
+
+function readJsonCache_(key) {
+  try {
+    const raw = CacheService.getScriptCache().get(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function writeJsonCache_(key, value, ttlSeconds) {
+  try {
+    CacheService.getScriptCache().put(key, JSON.stringify(value), ttlSeconds);
+  } catch (e) {
+    // Ignore cache serialization/size failures and serve uncached data.
+  }
+}
+
+function getRevisionValue_(key) {
+  const props = PropertiesService.getScriptProperties();
+  let revision = props.getProperty(key);
+  if (!revision) {
+    revision = '1';
+    props.setProperty(key, revision);
+  }
+  return revision;
+}
+
+function bumpRevisionValue_(key) {
+  const props = PropertiesService.getScriptProperties();
+  const nextRevision = String(Number(props.getProperty(key) || '1') + 1);
+  props.setProperty(key, nextRevision);
+  return nextRevision;
+}
+
+function getInitCacheKey_(activeEmail, targetEmail, requestedDateStr) {
+  return [
+    'INIT',
+    getRevisionValue_('APP_INIT_REVISION'),
+    String(activeEmail || '').toLowerCase(),
+    String(targetEmail || '').toLowerCase(),
+    requestedDateStr || 'AUTO'
+  ].join(':');
+}
+
+function getAdminCacheKey_(user) {
+  return [
+    'ADMIN',
+    getRevisionValue_('APP_ADMIN_REVISION'),
+    String(user.email || '').toLowerCase(),
+    String(user.rol || ''),
+    String(user.departamentoId || '')
+  ].join(':');
+}
+
+function getDateViewCacheKey_(activeEmail, targetEmail, requestedDateStr) {
+  return [
+    'DATE_VIEW',
+    getRevisionValue_('APP_INIT_REVISION'),
+    String(activeEmail || '').toLowerCase(),
+    String(targetEmail || '').toLowerCase(),
+    requestedDateStr || ''
+  ].join(':');
+}
+
+function getMenuBundleCacheKey_() {
+  const bucket = Math.floor(Date.now() / (5 * 60 * 1000));
+  return [
+    'MENU_BUNDLE',
+    getRevisionValue_('APP_MENU_REVISION'),
+    bucket
+  ].join(':');
+}
+
+function invalidateUserInitCache_() {
+  bumpRevisionValue_('APP_INIT_REVISION');
+  bumpRevisionValue_('APP_ADMIN_REVISION');
+  _configCache = null;
+}
+
+function invalidateMenuDataCache_() {
+  bumpRevisionValue_('APP_MENU_REVISION');
+}
+
 function getConfigValue_(key) {
   if (!_configCache) {
     _configCache = {};
@@ -1169,6 +1409,198 @@ function getConfigValue_(key) {
   }
   if (key === 'ALL') return _configCache;
   return _configCache[key] !== undefined ? _configCache[key] : '';
+}
+
+function getOperationalConfigDefinitions_() {
+  const defaultExpiry = formatDateWithOffset_(30);
+  return [
+    { key: 'LOGO_ID', value: '', description: 'ID del archivo de imagen del Logo en Drive' },
+    { key: 'APP_URL', value: ScriptApp.getService().getUrl(), description: 'URL publica de la aplicacion (Web App)' },
+    { key: 'MEAL_PRICE_CURRENT', value: '57', description: 'Costo actual por almuerzo. Al cambiarlo se conserva historial automatico por fecha.' },
+    { key: 'MEAL_PRICE_HISTORY_JSON', value: '[{"from":"1900-01-01","price":57}]', description: 'Historial auto-administrado del costo por almuerzo. No editar manualmente.' },
+    { key: 'SUMMARY_COST_HINT_LIMIT', value: '3', description: 'Cantidad maxima de cierres del hint del costo acumulado antes de ocultarlo.' },
+    { key: 'SUMMARY_COST_HINT_EXPIRES_ON', value: defaultExpiry, description: 'Fecha limite para mostrar el hint del costo acumulado (YYYY-MM-DD).' },
+    { key: 'CALDO_MULTI_HINT_LIMIT', value: '3', description: 'Cantidad maxima de cierres del hint de multiseleccion en Caldo.' },
+    { key: 'CALDO_MULTI_HINT_EXPIRES_ON', value: defaultExpiry, description: 'Fecha limite para mostrar el hint de multiseleccion en Caldo (YYYY-MM-DD).' }
+  ];
+}
+
+function ensureConfigKeysBatch_(definitions) {
+  try {
+    const sh = SpreadsheetApp.getActive().getSheetByName('Config');
+    if (!sh || !definitions || definitions.length === 0) return;
+
+    const data = readSheetValues_(sh, 3);
+    const existing = {};
+    for (let i = 1; i < data.length; i++) {
+      existing[String(data[i][0])] = true;
+    }
+
+    const missingRows = [];
+    definitions.forEach(def => {
+      if (!existing[def.key]) {
+        missingRows.push([def.key, def.value, def.description]);
+      }
+    });
+
+    if (missingRows.length > 0) {
+      sh.getRange(sh.getLastRow() + 1, 1, missingRows.length, 3).setValues(missingRows);
+      _configCache = null;
+    }
+  } catch (e) {
+    console.error("Error ensuring config schema: " + e.message);
+  }
+}
+
+function ensureOperationalConfigKeys_() {
+  const cache = CacheService.getScriptCache();
+  if (cache.get(OPERATIONAL_CONFIG_SCHEMA_CACHE_KEY)) return;
+  ensureConfigKeysBatch_(getOperationalConfigDefinitions_());
+  cache.put(OPERATIONAL_CONFIG_SCHEMA_CACHE_KEY, '1', 3600);
+}
+
+function ensureMealPriceConfig_() {
+  ensureConfigKey_('MEAL_PRICE_CURRENT', '57', 'Costo actual por almuerzo. Al cambiarlo se conserva historial automatico por fecha.');
+  ensureConfigKey_('MEAL_PRICE_HISTORY_JSON', '[{"from":"1900-01-01","price":57}]', 'Historial auto-administrado del costo por almuerzo. No editar manualmente.');
+}
+
+function ensureHintConfigKeys_() {
+  const defaultExpiry = formatDateWithOffset_(30);
+  ensureConfigKey_('SUMMARY_COST_HINT_LIMIT', '3', 'Cantidad maxima de cierres del hint del costo acumulado antes de ocultarlo.');
+  ensureConfigKey_('SUMMARY_COST_HINT_EXPIRES_ON', defaultExpiry, 'Fecha limite para mostrar el hint del costo acumulado (YYYY-MM-DD).');
+  ensureConfigKey_('CALDO_MULTI_HINT_LIMIT', '3', 'Cantidad maxima de cierres del hint de multiseleccion en Caldo.');
+  ensureConfigKey_('CALDO_MULTI_HINT_EXPIRES_ON', defaultExpiry, 'Fecha limite para mostrar el hint de multiseleccion en Caldo (YYYY-MM-DD).');
+}
+
+function getHintConfig_() {
+  return {
+    summaryCost: {
+      limit: parsePositiveInt_(getConfigValue_('SUMMARY_COST_HINT_LIMIT'), 3),
+      expiresOn: normalizeHintDate_(getConfigValue_('SUMMARY_COST_HINT_EXPIRES_ON'), formatDateWithOffset_(30))
+    },
+    caldoMulti: {
+      limit: parsePositiveInt_(getConfigValue_('CALDO_MULTI_HINT_LIMIT'), 3),
+      expiresOn: normalizeHintDate_(getConfigValue_('CALDO_MULTI_HINT_EXPIRES_ON'), formatDateWithOffset_(30))
+    }
+  };
+}
+
+function normalizeHintDate_(value, fallback) {
+  const normalized = String(value || '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : fallback;
+}
+
+function parsePositiveInt_(value, fallback) {
+  const parsed = parseInt(value, 10);
+  return isNaN(parsed) || parsed <= 0 ? fallback : parsed;
+}
+
+function normalizeMealPriceValue_(value) {
+  const rawValue = value === null || value === undefined ? '' : String(value);
+  const parsed = Number(rawValue.replace(/[^0-9,.-]/g, '').replace(',', '.'));
+  if (!isFinite(parsed) || parsed <= 0) {
+    throw new Error("El costo por comida debe ser un numero mayor que cero.");
+  }
+  return Math.round(parsed * 100) / 100;
+}
+
+function getCurrentMealPrice_() {
+  try {
+    return normalizeMealPriceValue_(getConfigValue_('MEAL_PRICE_CURRENT') || '57');
+  } catch (e) {
+    return 57;
+  }
+}
+
+function normalizeMealPriceHistory_(history) {
+  if (!Array.isArray(history)) return [];
+
+  const byDate = {};
+  history.forEach(entry => {
+    const from = entry && entry.from ? String(entry.from) : '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) return;
+
+    try {
+      byDate[from] = normalizeMealPriceValue_(entry.price);
+    } catch (e) {
+      // Ignore invalid history entries and keep the valid set.
+    }
+  });
+
+  return Object.keys(byDate)
+    .sort()
+    .map(from => ({ from: from, price: byDate[from] }));
+}
+
+function getMealPriceHistory_() {
+  const fallback = [{ from: '1900-01-01', price: getCurrentMealPrice_() }];
+  const raw = getConfigValue_('MEAL_PRICE_HISTORY_JSON');
+  if (!raw) return fallback;
+
+  try {
+    const normalized = normalizeMealPriceHistory_(JSON.parse(raw));
+    return normalized.length > 0 ? normalized : fallback;
+  } catch (e) {
+    return fallback;
+  }
+}
+
+function upsertMealPriceHistory_(history, price, effectiveDate) {
+  const normalized = normalizeMealPriceHistory_(history);
+  const next = {};
+  normalized.forEach(entry => {
+    next[entry.from] = entry.price;
+  });
+  next[effectiveDate] = normalizeMealPriceValue_(price);
+
+  return Object.keys(next)
+    .sort()
+    .map(from => ({ from: from, price: next[from] }));
+}
+
+function getTodayYmd_() {
+  return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+}
+
+function formatDateWithOffset_(days) {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  return Utilities.formatDate(date, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+}
+
+function normalizeMenuText_(value) {
+  if (value === null || value === undefined) return '';
+
+  const minorWords = {
+    de: true, del: true, la: true, las: true, el: true, los: true,
+    y: true, e: true, o: true, u: true, con: true, al: true, en: true
+  };
+
+  const cleaned = String(value).trim().replace(/\s+/g, ' ');
+  if (!cleaned) return '';
+
+  return cleaned
+    .toLowerCase()
+    .split(' ')
+    .map((word, index) => {
+      return word
+        .split(/([/-])/)
+        .map(part => {
+          if (!part || part === '/' || part === '-') return part;
+          if (index > 0 && minorWords[part]) return part;
+          return part.charAt(0).toUpperCase() + part.slice(1);
+        })
+        .join('');
+    })
+    .join(' ');
+}
+
+function normalizeOrderDetail_(detail) {
+  const normalized = detail && typeof detail === 'object' ? Object.assign({}, detail) : {};
+  if (Array.isArray(normalized.items)) {
+    normalized.items = normalized.items.map(normalizeMenuText_);
+  }
+  return normalized;
 }
 
 function getHolidaysList_() {
@@ -1247,24 +1679,31 @@ function formatDisplayDate_(dateStr) {
 
 function getSignatureDataUrl_() {
   const cache = CacheService.getScriptCache();
-  const cached = cache.get('SIG_V3_PROD');
-  if (cached) return cached;
   const fileId = getConfigValue_('FOOTER_SIGNATURE_ID');
   if (!fileId) return '';
+  const cacheKey = `SIG_V4:${fileId}`;
+  const cached = cache.get(cacheKey);
+  if (cached) return cached;
   try {
-    const file = Drive.Files.get(fileId, { fields: 'thumbnailLink' });
-    if (!file || !file.thumbnailLink) return '';
-    const url = file.thumbnailLink.replace(/=s\d+$/, '=s300');
-    const blob = UrlFetchApp.fetch(url, { headers: { 'Authorization': 'Bearer ' + ScriptApp.getOAuthToken() } }).getBlob();
-    const b64 = Utilities.base64Encode(blob.getBytes());
-    const dataUrl = 'data:image/png;base64,' + b64;
-    cache.put('SIG_V3_PROD', dataUrl, 21600);
+    const blob = DriveApp.getFileById(fileId).getBlob();
+    const dataUrl = `data:${blob.getContentType()};base64,${Utilities.base64Encode(blob.getBytes())}`;
+    cache.put(cacheKey, dataUrl, 21600);
     return dataUrl;
-  } catch (e) { return ''; }
+  } catch (blobError) {
+    try {
+      const file = Drive.Files.get(fileId, { fields: 'thumbnailLink' });
+      if (!file || !file.thumbnailLink) return '';
+      const imageUrl = file.thumbnailLink.replace(/=s\d+(-[a-z])?$/, '=s300');
+      cache.put(cacheKey, imageUrl, 21600);
+      return imageUrl;
+    } catch (thumbnailError) {
+      return '';
+    }
+  }
 }
 
 function getAvailableMenuDates_(fetchAll, menuData) {
-  const data = menuData || SpreadsheetApp.getActive().getSheetByName('Menu').getDataRange().getValues();
+  const data = menuData || readSheetValues_(SpreadsheetApp.getActive().getSheetByName('Menu'), 6);
   // data[0] is header if raw fetch, but if logic assumes slicing elsewhere...
   // The original logic: data = menuSh.getRange(2, 1, ..., 2).getValues(); (No headers)
   // But generic 'getDataRange' includes headers.
@@ -1292,8 +1731,30 @@ function getAvailableMenuDates_(fetchAll, menuData) {
   return valid;
 }
 
+function getMenuBundle_() {
+  const cacheKey = getMenuBundleCacheKey_();
+  const cachedBundle = readJsonCache_(cacheKey);
+  if (cachedBundle && cachedBundle.dates && cachedBundle.menusByDate) {
+    return cachedBundle;
+  }
+
+  const menuData = readSheetValues_(SpreadsheetApp.getActive().getSheetByName('Menu'), 6);
+  const dates = getAvailableMenuDates_(true, menuData);
+  const menusByDate = getAllMenus_(dates, menuData);
+  const bundle = { dates: dates, menusByDate: menusByDate };
+  writeJsonCache_(cacheKey, bundle, 300);
+  return bundle;
+}
+
+function createSingleDateMap_(dateStr, menu) {
+  if (!dateStr) return {};
+  const map = {};
+  map[dateStr] = menu || {};
+  return map;
+}
+
 function getAllMenus_(availableDates, menuData) {
-  const data = menuData || SpreadsheetApp.getActive().getSheetByName('Menu').getDataRange().getValues();
+  const data = menuData || readSheetValues_(SpreadsheetApp.getActive().getSheetByName('Menu'), 6);
   const menuMap = {};
   const validDates = new Set(availableDates.map(d => d.value));
   availableDates.forEach(d => { menuMap[d.value] = {}; });
@@ -1301,7 +1762,7 @@ function getAllMenus_(availableDates, menuData) {
     const rowDate = formatDate_(new Date(data[i][1]));
     if (validDates.has(rowDate) && String(data[i][5]).toUpperCase() === 'SI') {
       const cat = data[i][2];
-      const item = { id: data[i][0], plato: data[i][3], desc: data[i][4] };
+      const item = { id: data[i][0], plato: normalizeMenuText_(data[i][3]), desc: normalizeMenuText_(data[i][4]) };
       if (!menuMap[rowDate][cat]) menuMap[rowDate][cat] = [];
       menuMap[rowDate][cat].push(item);
     }
@@ -1310,17 +1771,72 @@ function getAllMenus_(availableDates, menuData) {
 }
 
 function getAllUserOrders_(email, availableDates, ordersData) {
-  const data = ordersData || SpreadsheetApp.getActive().getSheetByName('Pedidos').getDataRange().getValues();
+  const data = ordersData || readSheetValues_(SpreadsheetApp.getActive().getSheetByName('Pedidos'), 9);
   const ordersMap = {};
-  // Return all active orders regardless of "availableDates" to support Summary view
-  // Frontend will decide what to show based on selected date range.
+  const validDates = Array.isArray(availableDates) && availableDates.length > 0
+    ? new Set(availableDates.map(d => d.value))
+    : null;
   for (let i = 1; i < data.length; i++) {
     const rowDate = formatDate_(new Date(data[i][2]));
-    if (String(data[i][3]).toLowerCase() === email && data[i][8] !== 'CANCELADO') {
-      ordersMap[rowDate] = { id: data[i][0], resumen: data[i][6], detalle: JSON.parse(data[i][7] || '{}') };
+    if (validDates && !validDates.has(rowDate)) continue;
+    if (String(data[i][3]).toLowerCase() === String(email).toLowerCase() && data[i][8] !== 'CANCELADO') {
+      let detail = {};
+      try {
+        detail = JSON.parse(data[i][7] || '{}');
+      } catch (e) {
+        detail = {};
+      }
+      ordersMap[rowDate] = {
+        id: data[i][0],
+        resumen: normalizeMenuText_(data[i][6]),
+        detalle: normalizeOrderDetail_(detail)
+      };
     }
   }
   return ordersMap;
+}
+
+function getUserOrderByDate_(email, dateStr, ordersData) {
+  const data = ordersData || readSheetValues_(SpreadsheetApp.getActive().getSheetByName('Pedidos'), 9);
+  for (let i = 1; i < data.length; i++) {
+    const rowDate = formatDate_(new Date(data[i][2]));
+    if (rowDate !== dateStr) continue;
+    if (String(data[i][3]).toLowerCase() !== String(email).toLowerCase()) continue;
+    if (data[i][8] === 'CANCELADO') continue;
+
+    let detail = {};
+    try {
+      detail = JSON.parse(data[i][7] || '{}');
+    } catch (e) {
+      detail = {};
+    }
+
+    return {
+      id: data[i][0],
+      resumen: normalizeMenuText_(data[i][6]),
+      detalle: normalizeOrderDetail_(detail)
+    };
+  }
+  return null;
+}
+
+function getUserAccessRecord_(targetEmail, usersData) {
+  const email = targetEmail ? targetEmail.toLowerCase() : Session.getActiveUser().getEmail().toLowerCase();
+  const data = usersData || readSheetValues_(SpreadsheetApp.getActive().getSheetByName('Usuarios'), 7);
+
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][0]).toLowerCase() === email) {
+      return {
+        email: data[i][0],
+        nombre: data[i][1],
+        departamentoId: data[i][2],
+        rol: data[i][3],
+        estado: data[i][4],
+        codigo: data[i][6] || ''
+      };
+    }
+  }
+  return null;
 }
 
 function getUserPrefs_(email, usersData) {
@@ -1333,22 +1849,28 @@ function getUserPrefs_(email, usersData) {
   return {};
 }
 
-function getDepartmentStats_(dateStr, deptIdFilter, ordersData) {
+function getDepartmentStats_(dateStr, deptIdFilter, ordersData, deptMap) {
   const departmentStats = { total: 0, byUser: [] };
-  const orders = getOrdersByDate_(dateStr, ordersData);
-  orders.forEach(o => {
-    // Check ID
-    if (!deptIdFilter || o.departamentoId === deptIdFilter) {
-      departmentStats.total++;
-      departmentStats.byUser.push({ nombre: o.nombre, pedido: o.resumen, depto: o.departamento });
-    }
-  });
+  const data = ordersData || readSheetValues_(SpreadsheetApp.getActive().getSheetByName('Pedidos'), 9);
+  const currentDeptMap = deptMap || getDepartmentMap_();
+  for (let i = 1; i < data.length; i++) {
+    const rowDate = formatDate_(new Date(data[i][2]));
+    if (rowDate !== dateStr || data[i][8] === 'CANCELADO') continue;
+    if (deptIdFilter && data[i][5] !== deptIdFilter) continue;
+
+    departmentStats.total++;
+    departmentStats.byUser.push({
+      nombre: data[i][4],
+      pedido: normalizeMenuText_(data[i][6]),
+      depto: currentDeptMap[data[i][5]] || data[i][5]
+    });
+  }
   return departmentStats;
 }
 
-function getOrdersByDate_(dateStr, ordersData) {
+function getOrdersByDate_(dateStr, ordersData, deptMap) {
   const data = ordersData || SpreadsheetApp.getActive().getSheetByName('Pedidos').getDataRange().getValues();
-  const deptMap = getDepartmentMap_();
+  const currentDeptMap = deptMap || getDepartmentMap_();
   const list = [];
   for (let i = 1; i < data.length; i++) {
     const rowDate = formatDate_(new Date(data[i][2]));
@@ -1356,8 +1878,8 @@ function getOrdersByDate_(dateStr, ordersData) {
       list.push({
         nombre: data[i][4],
         departamentoId: data[i][5],
-        departamento: deptMap[data[i][5]] || data[i][5],
-        resumen: data[i][6]
+        departamento: currentDeptMap[data[i][5]] || data[i][5],
+        resumen: normalizeMenuText_(data[i][6])
       });
     }
   }
@@ -1380,28 +1902,89 @@ function validateOrderRules_(sel) {
   if (cats.includes('Arroces') && cats.includes('Viveres')) throw new Error("No puedes combinar Arroz y Víveres.");
 }
 
+function buildOrderRecordId_(email, dateStr) {
+  return ['ORD', String(dateStr || ''), String(email || '').toLowerCase()].join('|');
+}
+
+function findOrderRowById_(sheet, orderId) {
+  if (!sheet || !orderId) return 0;
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return 0;
+  const match = sheet
+    .getRange(2, 1, lastRow - 1, 1)
+    .createTextFinder(String(orderId))
+    .matchEntireCell(true)
+    .findNext();
+  return match ? match.getRow() : 0;
+}
+
+function getOrderSnapshotByRow_(sheet, rowIdx) {
+  if (!sheet || rowIdx < 2) return null;
+  const row = sheet.getRange(rowIdx, 1, 1, 9).getValues()[0];
+  if (!row || !row[0]) return null;
+  return {
+    rowIdx: rowIdx,
+    id: row[0],
+    date: formatDate_(new Date(row[2])),
+    email: row[3],
+    nombre: row[4],
+    departamentoId: row[5],
+    resumen: row[6],
+    rawDetail: row[7],
+    estado: row[8]
+  };
+}
+
+function cancelOrderRecordById_(orderId, canCancelFn) {
+  const sh = SpreadsheetApp.getActive().getSheetByName('Pedidos');
+  const rowIdx = findOrderRowById_(sh, orderId);
+  if (!rowIdx) return { found: false };
+
+  const snapshot = getOrderSnapshotByRow_(sh, rowIdx);
+  if (!snapshot || snapshot.estado === 'CANCELADO') {
+    return { found: false };
+  }
+
+  const allowed = typeof canCancelFn === 'function' ? !!canCancelFn(snapshot) : true;
+  if (!allowed) {
+    return { found: true, allowed: false, date: snapshot.date, snapshot: snapshot };
+  }
+
+  sh.getRange(rowIdx, 9, 1, 2).setValues([['CANCELADO', new Date()]]);
+  return { found: true, allowed: true, date: snapshot.date, snapshot: snapshot };
+}
+
 function saveOrderToSheet_(user, dateStr, selection, creatorEmail) {
   const sh = SpreadsheetApp.getActive().getSheetByName('Pedidos');
-  const data = sh.getDataRange().getValues();
-  let rowIdx = -1;
-  for (let i = 1; i < data.length; i++) {
-    const rowDate = formatDate_(new Date(data[i][2]));
-    if (rowDate === dateStr && String(data[i][3]).toLowerCase() === user.email) {
-      rowIdx = i + 1;
-      break;
-    }
+  const submittedOrderId = selection && selection.orderId ? String(selection.orderId) : '';
+  const deterministicId = buildOrderRecordId_(user.email, dateStr);
+  let rowIdx = findOrderRowById_(sh, submittedOrderId);
+  if (!rowIdx && submittedOrderId !== deterministicId) {
+    rowIdx = findOrderRowById_(sh, deterministicId);
   }
-  const id = rowIdx > 0 ? data[rowIdx - 1][0] : Utilities.getUuid();
+  const id = submittedOrderId || deterministicId;
   const now = new Date();
+  const normalizedItems = (selection.items || []).map(normalizeMenuText_);
+  const orderDetail = {
+    categorias: Array.isArray(selection.categorias) ? selection.categorias.slice() : [],
+    items: normalizedItems,
+    comentarios: selection.comentarios || ''
+  };
 
   // Save ID in col 6 (Index 5)
   const rowData = [
     id, now, dateStr, user.email, user.nombre, user.departamentoId,
-    selection.items.join(', '), JSON.stringify(selection), 'ACTIVO', now,
+    normalizedItems.join(', '), JSON.stringify(orderDetail), 'ACTIVO', now,
     creatorEmail || user.email
   ];
   if (rowIdx > 0) sh.getRange(rowIdx, 1, 1, rowData.length).setValues([rowData]);
-  else sh.appendRow(rowData);
+  else sh.getRange(sh.getLastRow() + 1, 1, 1, rowData.length).setValues([rowData]);
+
+  return {
+    id: id,
+    resumen: normalizedItems.join(', '),
+    detalle: normalizeOrderDetail_(orderDetail)
+  };
 }
 
 function sendEmail_(to, subject, htmlBody, cc, attachments) {

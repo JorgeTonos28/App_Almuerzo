@@ -103,6 +103,7 @@ function ensureBackupFolder_(configSheet) {
 
 function populateDefaultConfig_(sheet){
   if (!sheet || sheet.getLastRow() > 1) return;
+  const hintExpiry = Utilities.formatDate(new Date(Date.now() + (30 * 24 * 60 * 60 * 1000)), Session.getScriptTimeZone(), 'yyyy-MM-dd');
   const defaults = [
     ['HORA_ENVIO', '15:00', 'Hora militar envío reportes a responsables (HH:MM)'],
     ['MINUTOS_PREV_CIERRE', '30', 'Minutos antes del envío para cerrar pedidos'],
@@ -117,6 +118,12 @@ function populateDefaultConfig_(sheet){
     ['RESPONSIBLES_EMAILS_JSON', '{}', 'JSON mapeo DeptoID->Emails.'],
     ['PLAN_WEEK_TEXT', '¡Planifica tu semana! Ahora puedes adelantar tus pedidos para todos los días disponibles.', 'Texto del banner de planificación'],
     ['PLAN_WEEK_LIMIT', '5', 'Número de veces que se mostrará el banner al usuario'],
+    ['SUMMARY_COST_HINT_LIMIT', '3', 'Cantidad maxima de cierres del hint del costo acumulado antes de ocultarlo.'],
+    ['SUMMARY_COST_HINT_EXPIRES_ON', hintExpiry, 'Fecha limite para mostrar el hint del costo acumulado (YYYY-MM-DD).'],
+    ['CALDO_MULTI_HINT_LIMIT', '3', 'Cantidad maxima de cierres del hint de multiseleccion en Caldo.'],
+    ['CALDO_MULTI_HINT_EXPIRES_ON', hintExpiry, 'Fecha limite para mostrar el hint de multiseleccion en Caldo (YYYY-MM-DD).'],
+    ['MEAL_PRICE_CURRENT', '57', 'Costo actual por almuerzo. Al cambiarlo se conserva historial automatico por fecha.'],
+    ['MEAL_PRICE_HISTORY_JSON', '[{"from":"1900-01-01","price":57}]', 'Historial auto-administrado del costo por almuerzo. No editar manualmente.'],
     ['DAILY_REPORT_MODEL_ID', '', 'ID del archivo modelo Excel para reportes diarios'],
     ['LOGO_ID', '', 'ID del archivo de imagen del Logo en Drive'],
     ['APP_URL', '', 'URL pública de la aplicación (Web App) para enlaces en correos']
