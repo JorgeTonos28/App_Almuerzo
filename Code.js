@@ -1,11 +1,16 @@
 /**
  * Code.gs - Backend V5 (Refactor & New Features)
  */
-const APP_VERSION = 'v7.8';
+const APP_VERSION = 'v7.9';
 
 // === RUTAS E INICIO ===
 
 function doGet(e) {
+  const params = e && e.parameter ? e.parameter : {};
+  if (isMenuDayEndpointRequest_(params)) {
+    return handleMenuDayEndpointRequest_(params);
+  }
+
   const t = HtmlService.createTemplateFromFile('index');
   const user = getUserInfo_();
   t.signatureUrl = '';
@@ -35,6 +40,147 @@ function doGet(e) {
 
 function include(filename) {
   return HtmlService.createHtmlOutputFromFile(filename).getContent();
+}
+
+function isMenuDayEndpointRequest_(params) {
+  const endpoint = String(params.endpoint || params.api || params.action || '').trim().toLowerCase();
+  return endpoint === 'menu-dia' || endpoint === 'menu_day' || endpoint === 'menu-day';
+}
+
+function handleMenuDayEndpointRequest_(params) {
+  try {
+    ensureOperationalConfigKeys_();
+
+    const configuredToken = String(getConfigValue_('MENU_DAY_ENDPOINT_TOKEN') || '').trim();
+    const providedToken = String(params.token || params.apiKey || params.key || '').trim();
+
+    if (!configuredToken) {
+      return createJsonResponse_({
+        ok: false,
+        status: 503,
+        error: 'ENDPOINT_NOT_CONFIGURED',
+        msg: 'Endpoint no configurado. Define MENU_DAY_ENDPOINT_TOKEN en Config.'
+      });
+    }
+
+    if (!providedToken || providedToken !== configuredToken) {
+      return createJsonResponse_({
+        ok: false,
+        status: 401,
+        error: 'UNAUTHORIZED',
+        msg: 'Token invalido.'
+      });
+    }
+
+    return createJsonResponse_(getMenuDayEndpointPayload_(params.fecha || params.date));
+  } catch (err) {
+    const msg = err && err.message ? err.message : 'Error interno.';
+    const isDateError = msg.indexOf('Fecha') === 0;
+    return createJsonResponse_({
+      ok: false,
+      status: isDateError ? 400 : 500,
+      error: isDateError ? 'INVALID_DATE' : 'SERVER_ERROR',
+      msg: msg
+    });
+  }
+}
+
+function createJsonResponse_(payload) {
+  return ContentService
+    .createTextOutput(JSON.stringify(payload))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function normalizeEndpointDate_(value) {
+  const dateStr = String(value || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    throw new Error('Fecha requerida en formato YYYY-MM-DD.');
+  }
+
+  const date = new Date(dateStr + 'T12:00:00');
+  if (isNaN(date.getTime()) || formatDate_(date) !== dateStr) {
+    throw new Error('Fecha invalida.');
+  }
+
+  return dateStr;
+}
+
+function formatMenuRowDate_(rawDate) {
+  if (rawDate instanceof Date) return formatDate_(rawDate);
+
+  const raw = String(rawDate || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    return formatDate_(new Date(raw + 'T12:00:00'));
+  }
+
+  return formatDate_(new Date(rawDate));
+}
+
+function getMenuDayEndpointPayload_(dateValue) {
+  const dateStr = normalizeEndpointDate_(dateValue);
+  const cacheKey = [
+    'MENU_DAY_ENDPOINT',
+    getRevisionValue_('APP_MENU_REVISION'),
+    dateStr
+  ].join(':');
+
+  const cachedPayload = readJsonCache_(cacheKey);
+  if (cachedPayload) return cachedPayload;
+
+  const menuSheet = SpreadsheetApp.getActive().getSheetByName('Menu');
+  if (!menuSheet) throw new Error('Hoja Menu no encontrada.');
+
+  const data = readSheetValues_(menuSheet, 6);
+  const menu = {};
+  const items = [];
+
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    if (!row[1]) continue;
+
+    let rowDate = '';
+    try {
+      rowDate = formatMenuRowDate_(row[1]);
+    } catch (e) {
+      continue;
+    }
+
+    if (rowDate !== dateStr || String(row[5]).trim().toUpperCase() !== 'SI') continue;
+
+    const categoria = String(row[2] || '').trim();
+    if (!categoria) continue;
+
+    const item = {
+      id: row[0],
+      categoria: categoria,
+      plato: normalizeMenuText_(row[3]),
+      descripcion: normalizeMenuText_(row[4])
+    };
+
+    if (!menu[categoria]) menu[categoria] = [];
+    menu[categoria].push({
+      id: item.id,
+      plato: item.plato,
+      descripcion: item.descripcion
+    });
+    items.push(item);
+  }
+
+  const payload = {
+    ok: true,
+    fecha: dateStr,
+    date: dateStr,
+    label: formatDisplayDate_(dateStr),
+    existeMenu: items.length > 0,
+    exists: items.length > 0,
+    menu: menu,
+    items: items,
+    appVersion: APP_VERSION,
+    generadoEn: Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss")
+  };
+
+  writeJsonCache_(cacheKey, payload, 300);
+  return payload;
 }
 
 function serializeForInlineScript_(value) {
@@ -1302,7 +1448,7 @@ function backupOrdersToDrive_(dateStr) {
 
 // Helpers reused...
 let _configCache = null;
-const OPERATIONAL_CONFIG_SCHEMA_CACHE_KEY = 'CONFIG_SCHEMA_READY_V2';
+const OPERATIONAL_CONFIG_SCHEMA_CACHE_KEY = 'CONFIG_SCHEMA_READY_V3';
 
 function readSheetValues_(sheet, columnCount) {
   if (!sheet) return [];
@@ -1418,6 +1564,7 @@ function getOperationalConfigDefinitions_() {
     { key: 'APP_URL', value: ScriptApp.getService().getUrl(), description: 'URL publica de la aplicacion (Web App)' },
     { key: 'MEAL_PRICE_CURRENT', value: '57', description: 'Costo actual por almuerzo. Al cambiarlo se conserva historial automatico por fecha.' },
     { key: 'MEAL_PRICE_HISTORY_JSON', value: '[{"from":"1900-01-01","price":57}]', description: 'Historial auto-administrado del costo por almuerzo. No editar manualmente.' },
+    { key: 'MENU_DAY_ENDPOINT_TOKEN', value: '', description: 'Token secreto para consumir el endpoint JSON de menu por fecha. Generar y compartir solo con TI.' },
     { key: 'SUMMARY_COST_HINT_LIMIT', value: '3', description: 'Cantidad maxima de cierres del hint del costo acumulado antes de ocultarlo.' },
     { key: 'SUMMARY_COST_HINT_EXPIRES_ON', value: defaultExpiry, description: 'Fecha limite para mostrar el hint del costo acumulado (YYYY-MM-DD).' },
     { key: 'CALDO_MULTI_HINT_LIMIT', value: '3', description: 'Cantidad maxima de cierres del hint de multiseleccion en Caldo.' },

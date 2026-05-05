@@ -124,6 +124,7 @@ function populateDefaultConfig_(sheet){
     ['CALDO_MULTI_HINT_EXPIRES_ON', hintExpiry, 'Fecha limite para mostrar el hint de multiseleccion en Caldo (YYYY-MM-DD).'],
     ['MEAL_PRICE_CURRENT', '57', 'Costo actual por almuerzo. Al cambiarlo se conserva historial automatico por fecha.'],
     ['MEAL_PRICE_HISTORY_JSON', '[{"from":"1900-01-01","price":57}]', 'Historial auto-administrado del costo por almuerzo. No editar manualmente.'],
+    ['MENU_DAY_ENDPOINT_TOKEN', '', 'Token secreto para consumir el endpoint JSON de menu por fecha. Generar y compartir solo con TI.'],
     ['DAILY_REPORT_MODEL_ID', '', 'ID del archivo modelo Excel para reportes diarios'],
     ['LOGO_ID', '', 'ID del archivo de imagen del Logo en Drive'],
     ['APP_URL', '', 'URL pública de la aplicación (Web App) para enlaces en correos']
