@@ -1493,6 +1493,10 @@ function bumpRevisionValue_(key) {
   return nextRevision;
 }
 
+function generateSecretToken_() {
+  return Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
+}
+
 function getInitCacheKey_(activeEmail, targetEmail, requestedDateStr) {
   return [
     'INIT',
@@ -1564,7 +1568,7 @@ function getOperationalConfigDefinitions_() {
     { key: 'APP_URL', value: ScriptApp.getService().getUrl(), description: 'URL publica de la aplicacion (Web App)' },
     { key: 'MEAL_PRICE_CURRENT', value: '57', description: 'Costo actual por almuerzo. Al cambiarlo se conserva historial automatico por fecha.' },
     { key: 'MEAL_PRICE_HISTORY_JSON', value: '[{"from":"1900-01-01","price":57}]', description: 'Historial auto-administrado del costo por almuerzo. No editar manualmente.' },
-    { key: 'MENU_DAY_ENDPOINT_TOKEN', value: '', description: 'Token secreto para consumir el endpoint JSON de menu por fecha. Generar y compartir solo con TI.' },
+    { key: 'MENU_DAY_ENDPOINT_TOKEN', value: generateSecretToken_(), description: 'Token secreto para consumir el endpoint JSON de menu por fecha. Generar y compartir solo con TI.' },
     { key: 'SUMMARY_COST_HINT_LIMIT', value: '3', description: 'Cantidad maxima de cierres del hint del costo acumulado antes de ocultarlo.' },
     { key: 'SUMMARY_COST_HINT_EXPIRES_ON', value: defaultExpiry, description: 'Fecha limite para mostrar el hint del costo acumulado (YYYY-MM-DD).' },
     { key: 'CALDO_MULTI_HINT_LIMIT', value: '3', description: 'Cantidad maxima de cierres del hint de multiseleccion en Caldo.' },
@@ -1580,13 +1584,18 @@ function ensureConfigKeysBatch_(definitions) {
     const data = readSheetValues_(sh, 3);
     const existing = {};
     for (let i = 1; i < data.length; i++) {
-      existing[String(data[i][0])] = true;
+      existing[String(data[i][0])] = {
+        row: i + 1,
+        value: data[i][1]
+      };
     }
 
     const missingRows = [];
     definitions.forEach(def => {
       if (!existing[def.key]) {
         missingRows.push([def.key, def.value, def.description]);
+      } else if (def.key === 'MENU_DAY_ENDPOINT_TOKEN' && !String(existing[def.key].value || '').trim()) {
+        sh.getRange(existing[def.key].row, 2).setValue(generateSecretToken_());
       }
     });
 
