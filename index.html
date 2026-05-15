@@ -590,6 +590,16 @@
                   </div>
                </div>
 
+               <div v-if="isTestEmailMode" class="mb-6 border border-amber-200 bg-amber-50 rounded-xl p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                  <div>
+                     <div class="text-xs font-black text-amber-700 uppercase tracking-wide">Modo prueba activo</div>
+                     <div class="text-sm text-amber-900 font-semibold break-all">Destino: {{ adminState.config['TEST_EMAIL_DEST'] || 'Sin configurar' }}</div>
+                  </div>
+                  <button @click="runTestDailyCloseEmails" class="bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold py-2 px-4 rounded-lg flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed" :disabled="adminState.loading">
+                     <i class="fa-solid fa-paper-plane"></i> Enviar correos de prueba
+                  </button>
+               </div>
+
                <!-- Customized Inputs for specific keys -->
                <div class="grid gap-4 md:grid-cols-2">
                   <div v-for="item in adminState.configList" :key="item.key" v-show="item.key !== 'RESPONSIBLES_EMAILS_JSON' && item.key !== 'MEAL_PRICE_HISTORY_JSON'" class="bg-gray-50 p-4 rounded-xl border border-gray-200">
@@ -616,7 +626,7 @@
                      <i class="fa-solid fa-users-gear text-gray-400"></i> Responsables (Reportes Diarios)
                   </h3>
                   <div class="bg-gray-50 border border-gray-200 rounded-xl overflow-hidden p-4">
-                     <p class="text-xs text-gray-500 mb-4">Estos usuarios recibirán los reportes de TODOS los departamentos.</p>
+                     <p class="text-xs text-gray-500 mb-4">Los principales reciben reportes por departamento. La copia de esos correos queda reservada al admin departamental.</p>
 
                      <div class="space-y-3">
                         <div v-for="(r, idx) in adminState.responsiblesList" :key="idx" class="flex gap-2 items-center">

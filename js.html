@@ -140,6 +140,7 @@ createApp({
     const isAdmin = computed(() => activeUser.value.rol && ['ADMIN_GEN', 'ADMIN_DEP'].includes(activeUser.value.rol));
     const isDeptAdmin = computed(() => activeUser.value.rol === 'ADMIN_DEP');
     const isAdminGen = computed(() => activeUser.value.rol === 'ADMIN_GEN');
+    const isTestEmailMode = computed(() => String(adminState.config['TEST_EMAIL_MODE'] || '').trim().toUpperCase() === 'TRUE');
     
     const menuLoaded = computed(() => menu.value && Object.keys(menu.value).length > 0);
 
@@ -745,6 +746,32 @@ createApp({
        }).apiSaveConfig(payload);
     };
 
+    const runTestDailyCloseEmails = () => {
+       if (!isTestEmailMode.value) return;
+       if (!String(adminState.config['TEST_EMAIL_DEST'] || '').trim()) {
+          showModal("Configura TEST_EMAIL_DEST antes de enviar la prueba.", "Modo prueba");
+          return;
+       }
+
+       showModal("Se enviaran los correos de cierre en modo prueba. No se guardaran respaldos ni se ejecutara mantenimiento.", "Enviar prueba", "CONFIRM", () => {
+          adminState.loading = true;
+          google.script.run
+            .withSuccessHandler(res => {
+               adminState.loading = false;
+               if (res && res.ok) {
+                  showModal(res.msg || "Prueba enviada correctamente.", "Modo prueba");
+               } else {
+                  showModal((res && res.msg) || "No se pudo enviar la prueba.", "Error");
+               }
+            })
+            .withFailureHandler(err => {
+               adminState.loading = false;
+               showModal(err.message || "Error enviando la prueba.", "Error");
+            })
+            .apiSendDailyCloseEmailsTest();
+       });
+    };
+
     // Menu Actions
     const checkMenuDate = () => {
        if (!adminState.menuDate) return;
@@ -1242,7 +1269,7 @@ createApp({
       summaryDateStart, summaryDateEnd, activeUsersCount,
       
       // Computed
-      isAdmin, isDeptAdmin, isAdminGen, menuLoaded, categories,
+      isAdmin, isDeptAdmin, isAdminGen, isTestEmailMode, menuLoaded, categories,
       selectedCount, validationError, hasBlockingErrors, showGrainWarning,
       isDefaultSummary,
       displayDate, isCutoffPassed,
@@ -1261,7 +1288,7 @@ createApp({
 
       // Admin Actions
       openUserModal, saveUser, toggleUserStatus, adminCancelOrder,
-      openDeptModal, saveDept, deleteDept, saveConfig, clearFilters,
+      openDeptModal, saveDept, deleteDept, saveConfig, runTestDailyCloseEmails, clearFilters,
 
       // Dept Helpers
       addDeptAdmin, removeDeptAdmin, deptAdminSearch, filteredAdminUsers, deptMoveHint,

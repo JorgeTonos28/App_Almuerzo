@@ -1,7 +1,7 @@
 /**
  * Code.gs - Backend V5 (Refactor & New Features)
  */
-const APP_VERSION = 'v7.9';
+const APP_VERSION = 'v7.10';
 
 // === RUTAS E INICIO ===
 
@@ -611,152 +611,198 @@ function scheduledSendReminders() {
 }
 
 function scheduledDailyClose() {
-  // Only run on business days
-  if (!isTodayBusinessDay_()) {
+  const testRun = isTestEmailMode_();
+
+  if (!testRun && !isTodayBusinessDay_()) {
      console.log("Skipping scheduledDailyClose: Not a business day.");
      return;
   }
 
-  const now = new Date();
-  const nextBusinessDay = getNextBusinessDay_(now);
-  if (!nextBusinessDay) return;
+  try {
+    if (testRun) validateTestEmailConfig_();
+    const dateStr = getDailyCloseTargetDate_();
+    if (!dateStr) return;
 
-  const dateStr = formatDate_(nextBusinessDay);
-
-  // 1. Get Orders and Group by Dept
-  const orders = getOrdersByDateDetailed_(dateStr);
-  const byDept = {};
-  orders.forEach(o => {
-    const deptId = o.departamentoId || 'Sin Depto';
-    if (!byDept[deptId]) byDept[deptId] = [];
-    byDept[deptId].push(o);
-  });
-
-  // 2. Prepare Recipients Logic
-  const rawConfig = getConfigValue_('RESPONSIBLES_EMAILS_JSON');
-  let configRecipients = null;
-  try { configRecipients = JSON.parse(rawConfig); } catch(e) {}
-
-  const getRecipientsForDept = (deptId) => {
-      let list = [];
-      if (Array.isArray(configRecipients)) {
-          list = configRecipients; // Global list
-      } else if (configRecipients && typeof configRecipients === 'object') {
-          // Map: try specific dept
-          if (configRecipients[deptId] && Array.isArray(configRecipients[deptId])) {
-             list = configRecipients[deptId];
-          }
-      }
-
-      return {
-          to: list.filter(r => r.type === 'TO').map(r => r.email).join(','),
-          cc: list.filter(r => r.type === 'CC').map(r => r.email).join(',')
-      };
-  };
-
-  const deptMap = getDepartmentMap_();
-  const backupFolder = getDailyBackupFolder_(dateStr);
-
-  // =================================================================
-  // NUEVO: Cargar Admins de Departamento (Mapeo ID -> [Emails])
-  // =================================================================
-  const deptAdminsMap = {};
-  const uSh = SpreadsheetApp.getActive().getSheetByName('Usuarios');
-  const uData = uSh.getDataRange().getValues();
-  
-  // Empezamos en 1 para saltar encabezados
-  for(let i=1; i<uData.length; i++) {
-     const email = String(uData[i][0]).toLowerCase();
-     const deptId = uData[i][2];
-     const rol = uData[i][3];
-     const estado = uData[i][4];
-     
-     // Filtramos solo ADMIN_DEP que estén ACTIVOS
-     if (rol === 'ADMIN_DEP' && estado === 'ACTIVO') {
-        if (!deptAdminsMap[deptId]) deptAdminsMap[deptId] = [];
-        deptAdminsMap[deptId].push(email);
-     }
+    runDailyCloseReportEmails_(dateStr, {
+      testRun: testRun,
+      includeMaintenance: !testRun,
+      source: 'scheduled'
+    });
+  } catch (e) {
+    console.error("scheduledDailyClose error: " + e.message);
   }
-  // =================================================================
+}
 
-  // 3. Process each Department
-  Object.keys(byDept).forEach(deptId => {
-    const deptName = deptMap[deptId] || deptId;
-    const deptOrders = byDept[deptId];
+function apiSendDailyCloseEmailsTest() {
+  try {
+    const admin = getUserInfo_();
+    if (!admin || admin.rol !== 'ADMIN_GEN') throw new Error("Permiso denegado.");
 
-    // Resolve recipients for this department
-    // CAMBIO: Usamos 'let' en lugar de 'const' para poder modificar ccList
-    let { to: toList, cc: ccList } = getRecipientsForDept(deptId);
+    validateTestEmailConfig_();
+    const dateStr = getDailyCloseTargetDate_();
+    if (!dateStr) throw new Error("No se encontro una fecha habil para probar.");
 
-    // ===============================================================
-    // NUEVO: Inyectar Admins del Depto actual en el CC
-    // ===============================================================
-    const admins = deptAdminsMap[deptId];
-    if (admins && admins.length > 0) {
-       // Convertimos el string actual de CC en array
-       let ccArray = ccList ? ccList.split(',').map(e => e.trim()).filter(e => e) : [];
-       
-       // Agregamos los admins si no están ya en la lista
-       admins.forEach(adminEmail => {
-          if (!ccArray.includes(adminEmail)) {
-             ccArray.push(adminEmail);
-          }
-       });
-       
-       // Volvemos a unir en string
-       ccList = ccArray.join(',');
-    }
-    // ===============================================================
+    return runDailyCloseReportEmails_(dateStr, {
+      testRun: true,
+      includeMaintenance: false,
+      source: 'admin-ui'
+    });
+  } catch (e) {
+    return { ok: false, msg: e.message };
+  }
+}
 
-    // Format Filename Date: dd-MM-yyyy
-    const d = new Date(dateStr + 'T12:00:00');
-    const fDate = Utilities.formatDate(d, Session.getScriptTimeZone(), 'dd-MM-yyyy');
-    const fileName = `[${deptName} - ${fDate}]`;
+function testSendDailyCloseEmails() {
+  validateTestEmailConfig_();
+  const dateStr = getDailyCloseTargetDate_();
+  if (!dateStr) throw new Error("No se encontro una fecha habil para probar.");
+  return runDailyCloseReportEmails_(dateStr, {
+    testRun: true,
+    includeMaintenance: false,
+    source: 'manual'
+  });
+}
+
+function getDailyCloseTargetDate_() {
+  const nextBusinessDay = getNextBusinessDay_(new Date());
+  return nextBusinessDay ? formatDate_(nextBusinessDay) : '';
+}
+
+function isTestEmailMode_() {
+  return String(getConfigValue_('TEST_EMAIL_MODE') || '').trim().toUpperCase() === 'TRUE';
+}
+
+function validateTestEmailConfig_() {
+  if (!isTestEmailMode_()) throw new Error("El modo prueba de correos no esta activo.");
+  if (!String(getConfigValue_('TEST_EMAIL_DEST') || '').trim()) {
+    throw new Error("Configura TEST_EMAIL_DEST antes de enviar correos de prueba.");
+  }
+}
+
+function runDailyCloseReportEmails_(dateStr, options) {
+  const opts = options || {};
+  const testRun = opts.testRun === true;
+  const normalizedDate = normalizeReportDate_(dateStr);
+  const ss = SpreadsheetApp.getActive();
+  const deptMap = getDepartmentMap_();
+  const ordersData = readSheetValues_(ss.getSheetByName('Pedidos'), 11);
+  const usersData = readSheetValues_(ss.getSheetByName('Usuarios'), 7);
+  const codeMap = getUserCodeMap_(usersData);
+  const orders = sortOrdersForGeneralReport_(getOrdersByDateDetailed_(normalizedDate, {
+    ordersData: ordersData,
+    deptMap: deptMap,
+    codeMap: codeMap
+  }));
+  const byDept = groupOrdersByDepartment_(orders);
+  const deptSummary = getDepartmentOrderSummary_(byDept, deptMap);
+  const backupFolder = (!testRun && orders.length > 0) ? getDailyBackupFolder_(normalizedDate) : null;
+  const configRecipients = getReportRecipientsConfig_();
+  const deptAdminsMap = getDepartmentAdminsMap_(usersData);
+  const formattedDate = Utilities.formatDate(new Date(normalizedDate + 'T12:00:00'), Session.getScriptTimeZone(), 'dd/MM/yyyy');
+  const fileDate = Utilities.formatDate(new Date(normalizedDate + 'T12:00:00'), Session.getScriptTimeZone(), 'dd-MM-yyyy');
+
+  let departmentEmailsSent = 0;
+  let departmentReportsSaved = 0;
+
+  deptSummary.forEach(summary => {
+    const deptId = summary.id;
+    const deptName = summary.name;
+    const deptOrders = byDept[deptId] || [];
+    const recipients = getDepartmentReportRecipients_(deptId, configRecipients, deptAdminsMap);
+    const fileName = `[${deptName} - ${fileDate}]`;
+    let tempSS = null;
 
     try {
-      // Create Report SS from Template
-      const tempSS = createReportFromTemplate_(deptName, dateStr, deptOrders);
+      tempSS = createReportFromTemplate_(deptName, normalizedDate, deptOrders);
 
-      // Export PDF -> Backup
-      const pdfBlob = exportSheetToPdfBlob_(tempSS);
-      pdfBlob.setName(`${fileName}.pdf`);
-      backupFolder.createFile(pdfBlob);
+      if (!testRun && backupFolder) {
+        const pdfBlob = exportSheetToPdfBlob_(tempSS);
+        pdfBlob.setName(`${fileName}.pdf`);
+        backupFolder.createFile(pdfBlob);
+        departmentReportsSaved++;
+      }
 
-      // Export Excel -> Email
-      if (toList || ccList) {
+      if (recipients.to || recipients.cc) {
         const excelBlob = exportSheetToExcelBlob_(tempSS);
         excelBlob.setName(`${fileName}.xlsx`);
 
-        const formattedDate = Utilities.formatDate(new Date(dateStr + 'T12:00:00'), Session.getScriptTimeZone(), 'dd/MM/yyyy');
-
+        const toList = recipients.to || recipients.cc;
+        const ccList = recipients.to ? recipients.cc : '';
         const html = getEmailTemplate_({
            title: `Reporte ${deptName}`,
            subtitle: `Pedidos para el ${formattedDate}`,
            body: `
              <p>Buenas tardes estimados,</p>
-             <p>Hay <strong>${deptOrders.length}</strong> pedidos registrados del departamento de <strong>${deptName}</strong> para el día <strong>${formattedDate}</strong>.</p>
-             <p>Favor revisar el archivo Excel adjunto para más detalles sobre los platos solicitados.</p>
+             <p>Hay <strong>${deptOrders.length}</strong> pedidos registrados del departamento de <strong>${escapeHtml_(deptName)}</strong> para el dia <strong>${formattedDate}</strong>.</p>
+             <p>Favor revisar el archivo Excel adjunto para mas detalles sobre los platos solicitados.</p>
              <p>Cualquier duda, estamos a la orden.</p>
            `,
-           footerNote: 'Este reporte se genera automáticamente al cierre de pedidos.'
+           footerNote: testRun ? 'Correo de prueba. No se genero respaldo ni cierre real.' : 'Este reporte se genera automaticamente al cierre de pedidos.'
         });
 
-        sendEmail_(toList, `Almuerzo Pre-empacado | Reporte Almuerzo ${deptName} - ${dateStr}`, html, ccList, [excelBlob]);
+        sendEmail_(toList, `Almuerzo Pre-empacado | Reporte Almuerzo ${deptName} - ${normalizedDate}`, html, ccList, [excelBlob]);
+        departmentEmailsSent++;
       } else {
-         console.warn(`No recipients found for department ${deptName} (${deptId}). Report saved to backup only.`);
+        console.warn(`No recipients found for department ${deptName} (${deptId}).`);
       }
-
-      // Cleanup
-      DriveApp.getFileById(tempSS.getId()).setTrashed(true);
-
     } catch(e) {
       console.error(`Error processing report for ${deptName}: ${e.message}`);
+    } finally {
+      trashTempSpreadsheet_(tempSS);
     }
   });
 
-  // 4. Maintenance & Admin Summary
-  checkMenuIntegrity_();
-  sendDailyAdminSummary_(dateStr);
+  let generalExcelBlob = null;
+  let generalReportSaved = false;
+  if (orders.length > 0) {
+    let generalSS = null;
+    try {
+      generalSS = createAllDepartmentsReportFromTemplate_(normalizedDate, orders, byDept, deptSummary);
+      const generalFileName = `[Resumen general - ${fileDate}]`;
+
+      if (!testRun && backupFolder) {
+        const pdfBlob = exportSheetToPdfBlob_(generalSS, generalSS.getSheets()[0]);
+        pdfBlob.setName(`${generalFileName}.pdf`);
+        backupFolder.createFile(pdfBlob);
+        generalReportSaved = true;
+      }
+
+      if (String(getConfigValue_('ADMIN_EMAILS') || '').trim()) {
+        generalExcelBlob = exportSheetToExcelBlob_(generalSS);
+        generalExcelBlob.setName(`${generalFileName}.xlsx`);
+      }
+    } catch (e) {
+      console.error(`Error processing general report: ${e.message}`);
+    } finally {
+      trashTempSpreadsheet_(generalSS);
+    }
+  }
+
+  const adminSummarySent = sendDailyAdminSummary_(normalizedDate, {
+    orders: orders,
+    deptSummary: deptSummary,
+    attachments: generalExcelBlob ? [generalExcelBlob] : [],
+    testRun: testRun
+  });
+
+  if (opts.includeMaintenance !== false && !testRun) {
+    checkMenuIntegrity_();
+  }
+
+  return {
+    ok: true,
+    testRun: testRun,
+    date: normalizedDate,
+    orderCount: orders.length,
+    departmentCount: deptSummary.length,
+    departmentEmailsSent: departmentEmailsSent,
+    departmentReportsSaved: departmentReportsSaved,
+    generalReportSaved: generalReportSaved,
+    adminSummarySent: adminSummarySent,
+    msg: testRun
+      ? `Prueba enviada para ${formattedDate}. No se guardaron respaldos ni se ejecuto mantenimiento.`
+      : `Reportes enviados para ${formattedDate}.`
+  };
 }
 
 // === ADMIN API ===
@@ -2339,13 +2385,17 @@ function checkMenuIntegrity_() {
   }
 }
 
-function sendDailyAdminSummary_(dateStr) {
+function sendDailyAdminSummary_(dateStr, context) {
   const admins = getConfigValue_('ADMIN_EMAILS');
-  if (!admins) return;
-  const orders = getOrdersByDate_(dateStr);
+  if (!admins) return false;
+  const ctx = context || {};
+  const orders = ctx.orders || getOrdersByDate_(dateStr);
   const count = orders.length;
   if (count > 0) {
+     const deptSummary = ctx.deptSummary || getDepartmentOrderSummary_(groupOrdersByDepartment_(orders), getDepartmentMap_());
+     const attachments = ctx.attachments || [];
      const formattedDate = Utilities.formatDate(new Date(dateStr + 'T12:00:00'), Session.getScriptTimeZone(), 'dd/MM/yyyy');
+     const departmentTable = buildDepartmentSummaryTableHtml_(deptSummary);
      const html = getEmailTemplate_({
         title: 'Resumen Diario',
         subtitle: `Pedidos para el ${formattedDate}`,
@@ -2355,19 +2405,24 @@ function sendDailyAdminSummary_(dateStr) {
               <span style="font-size: 48px; font-weight: 800; color: #111827;">${count}</span>
               <p style="color: #6b7280; margin-top: 8px;">Pedidos Totales</p>
            </div>
-           <p>Los respaldos detallados han sido generados y guardados en Google Drive.</p>
+           ${departmentTable}
+           ${ctx.testRun ? '<p>Esta ejecucion fue de prueba; no se guardaron respaldos en Google Drive.</p>' : '<p>Los respaldos detallados han sido generados y guardados en Google Drive.</p>'}
+           ${attachments.length ? '<p>Se adjunta un Excel consolidado con el resumen general y una hoja por departamento.</p>' : ''}
         `,
-        cta: { text: 'Ver Panel Administrativo', url: getAppUrl_() }
+        cta: { text: 'Ver Panel Administrativo', url: getAppUrl_() },
+        footerNote: ctx.testRun ? 'Correo de prueba. No se generaron respaldos permanentes.' : ''
      });
-    sendEmail_(admins, `Almuerzo Pre-empacado | Resumen Pedidos ${dateStr}`, html);
+    sendEmail_(admins, `Almuerzo Pre-empacado | Resumen Pedidos ${dateStr}`, html, null, attachments);
+    return true;
   }
+  return false;
 }
 
-function getOrdersByDateDetailed_(dateStr) {
-  const sh = SpreadsheetApp.getActive().getSheetByName('Pedidos');
-  const data = sh.getDataRange().getValues();
-  const deptMap = getDepartmentMap_();
-  const codeMap = getUserCodeMap_();
+function getOrdersByDateDetailed_(dateStr, context) {
+  const ctx = context || {};
+  const data = ctx.ordersData || readSheetValues_(SpreadsheetApp.getActive().getSheetByName('Pedidos'), 11);
+  const deptMap = ctx.deptMap || getDepartmentMap_();
+  const codeMap = ctx.codeMap || getUserCodeMap_();
   const list = [];
   for (let i = 1; i < data.length; i++) {
     const rowDate = formatDate_(new Date(data[i][2]));
@@ -2388,9 +2443,8 @@ function getOrdersByDateDetailed_(dateStr) {
   return list;
 }
 
-function getUserCodeMap_() {
-   const sh = SpreadsheetApp.getActive().getSheetByName('Usuarios');
-   const data = sh.getDataRange().getValues();
+function getUserCodeMap_(usersData) {
+   const data = usersData || readSheetValues_(SpreadsheetApp.getActive().getSheetByName('Usuarios'), 7);
    const map = {};
    for(let i=1; i<data.length; i++) {
       const email = String(data[i][0]).toLowerCase();
@@ -2400,26 +2454,222 @@ function getUserCodeMap_() {
    return map;
 }
 
-function createReportFromTemplate_(deptName, dateStr, orders) {
+function normalizeReportDate_(dateStr) {
+  const normalized = String(dateStr || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+    throw new Error("Fecha invalida para reportes.");
+  }
+  return normalized;
+}
+
+function sortOrdersForGeneralReport_(orders) {
+  return (orders || []).slice().sort((a, b) => {
+    const deptCompare = String(a.departamento || '').localeCompare(String(b.departamento || ''), 'es');
+    if (deptCompare !== 0) return deptCompare;
+    return String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es');
+  });
+}
+
+function groupOrdersByDepartment_(orders) {
+  const grouped = {};
+  (orders || []).forEach(order => {
+    const deptId = order.departamentoId || 'Sin Depto';
+    if (!grouped[deptId]) grouped[deptId] = [];
+    grouped[deptId].push(order);
+  });
+  return grouped;
+}
+
+function getDepartmentOrderSummary_(byDept, deptMap) {
+  const currentDeptMap = deptMap || getDepartmentMap_();
+  return Object.keys(byDept || {}).map(deptId => {
+    const orders = byDept[deptId] || [];
+    return {
+      id: deptId,
+      name: currentDeptMap[deptId] || (orders[0] && orders[0].departamento) || deptId,
+      count: orders.length
+    };
+  }).sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'es'));
+}
+
+function getReportRecipientsConfig_() {
+  const rawConfig = getConfigValue_('RESPONSIBLES_EMAILS_JSON');
+  try {
+    return JSON.parse(rawConfig);
+  } catch(e) {
+    return null;
+  }
+}
+
+function getConfiguredReportRecipientsForDept_(deptId, configRecipients) {
+  let list = [];
+  if (Array.isArray(configRecipients)) {
+    list = configRecipients;
+  } else if (configRecipients && typeof configRecipients === 'object' && Array.isArray(configRecipients[deptId])) {
+    list = configRecipients[deptId];
+  }
+
+  return {
+    to: uniqueEmailList_(list
+      .filter(r => String(r && r.type || 'TO').toUpperCase() === 'TO')
+      .map(getRecipientEmail_)),
+    cc: uniqueEmailList_(list
+      .filter(r => String(r && r.type || '').toUpperCase() === 'CC')
+      .map(getRecipientEmail_))
+  };
+}
+
+function getDepartmentReportRecipients_(deptId, configRecipients, deptAdminsMap) {
+  const configured = getConfiguredReportRecipientsForDept_(deptId, configRecipients);
+  const toList = configured.to;
+  const deptAdmins = uniqueEmailList_((deptAdminsMap[deptId] || []).filter(email => toList.indexOf(email) === -1));
+
+  return {
+    to: joinEmailList_(toList),
+    cc: joinEmailList_(deptAdmins)
+  };
+}
+
+function getDepartmentAdminsMap_(usersData) {
+  const map = {};
+  const data = usersData || readSheetValues_(SpreadsheetApp.getActive().getSheetByName('Usuarios'), 7);
+
+  for (let i = 1; i < data.length; i++) {
+    const email = String(data[i][0] || '').trim().toLowerCase();
+    const deptId = data[i][2];
+    const rol = String(data[i][3] || '').trim().toUpperCase();
+    const estado = String(data[i][4] || '').trim().toUpperCase();
+
+    if (email && deptId && rol === 'ADMIN_DEP' && estado === 'ACTIVO') {
+      if (!map[deptId]) map[deptId] = [];
+      map[deptId].push(email);
+    }
+  }
+
+  Object.keys(map).forEach(deptId => {
+    map[deptId] = uniqueEmailList_(map[deptId]);
+  });
+  return map;
+}
+
+function getRecipientEmail_(recipient) {
+  if (!recipient) return '';
+  if (typeof recipient === 'string') return recipient;
+  return recipient.email || recipient.mail || '';
+}
+
+function splitEmailList_(value) {
+  if (Array.isArray(value)) {
+    return value.reduce((acc, item) => acc.concat(splitEmailList_(item)), []);
+  }
+  return String(value || '')
+    .split(/[;,]/)
+    .map(email => email.trim().toLowerCase())
+    .filter(email => email);
+}
+
+function uniqueEmailList_(values) {
+  const seen = {};
+  const result = [];
+  splitEmailList_(values).forEach(email => {
+    if (!seen[email]) {
+      seen[email] = true;
+      result.push(email);
+    }
+  });
+  return result;
+}
+
+function joinEmailList_(values) {
+  return uniqueEmailList_(values).join(',');
+}
+
+function getUsedSheetNames_(ss) {
+  const used = {};
+  ss.getSheets().forEach(sheet => {
+    used[sheet.getName()] = true;
+  });
+  return used;
+}
+
+function makeUniqueSheetName_(name, usedNames) {
+  const used = usedNames || {};
+  let base = String(name || 'Hoja')
+    .replace(/[\[\]\*\/\\\?:]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!base) base = 'Hoja';
+  base = base.substring(0, 95);
+
+  let candidate = base;
+  let counter = 2;
+  while (used[candidate]) {
+    const suffix = ` ${counter}`;
+    candidate = base.substring(0, 100 - suffix.length) + suffix;
+    counter++;
+  }
+  return candidate;
+}
+
+function escapeHtml_(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function buildDepartmentSummaryTableHtml_(deptSummary) {
+  if (!deptSummary || deptSummary.length === 0) return '';
+
+  const rows = deptSummary.map(item => `
+    <tr>
+      <td style="padding: 12px 14px; border-top: 1px solid #e5e7eb; color: #111827; font-weight: 700;">${escapeHtml_(item.name)}</td>
+      <td style="padding: 12px 14px; border-top: 1px solid #e5e7eb; color: #2563eb; font-weight: 800; text-align: right;">${item.count}</td>
+    </tr>
+  `).join('');
+
+  return `
+    <div style="margin: 24px 0; border: 1px solid #dbeafe; border-radius: 14px; overflow: hidden; background: #ffffff;">
+      <div style="background: #eff6ff; padding: 12px 14px; border-bottom: 1px solid #dbeafe;">
+        <p style="margin: 0; color: #1e3a8a; font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em;">Pedidos por departamento</p>
+      </div>
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse: collapse;">
+        <thead>
+          <tr>
+            <th align="left" style="padding: 10px 14px; color: #6b7280; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em;">Departamento</th>
+            <th align="right" style="padding: 10px 14px; color: #6b7280; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em;">Pedidos</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function trashTempSpreadsheet_(ss) {
+  if (!ss) return;
+  try {
+    DriveApp.getFileById(ss.getId()).setTrashed(true);
+  } catch (e) {
+    console.error("Error cleaning temp report: " + e.message);
+  }
+}
+
+function createReportSpreadsheetFromTemplate_(reportName) {
   const templateId = getConfigValue_('DAILY_REPORT_MODEL_ID');
   if (!templateId) throw new Error("Falta configurar DAILY_REPORT_MODEL_ID");
 
-  // Copy Template (Handling .xlsx if needed by converting)
   const templateFile = DriveApp.getFileById(templateId);
-  const newFile = templateFile.makeCopy(`Temp_Report_${deptName}_${dateStr}`);
-
-  // If original is .xlsx, makeCopy keeps it as .xlsx (Blob) or Google Sheet depending on settings?
-  // DriveApp.makeCopy of non-native file creates non-native copy.
-  // We need to convert it.
-
+  const newFile = templateFile.makeCopy(reportName);
   let ssId = newFile.getId();
 
-  // Check if we need to convert (if mimeType is not Google Spreadsheet)
   if (newFile.getMimeType() !== MimeType.GOOGLE_SHEETS) {
      const blob = newFile.getBlob();
      const config = {
-        title: `Temp_Report_${deptName}_${dateStr}`,
-        parents: [{id: 'root'}], // Temporary location
+        title: reportName,
+        parents: [{id: 'root'}],
         mimeType: MimeType.GOOGLE_SHEETS
      };
      try {
@@ -2432,11 +2682,46 @@ function createReportFromTemplate_(deptName, dateStr, orders) {
      }
   }
 
-  const ss = SpreadsheetApp.openById(ssId);
-  const sh = ss.getSheets()[0]; // Assume first sheet
+  return SpreadsheetApp.openById(ssId);
+}
+
+function createReportFromTemplate_(deptName, dateStr, orders) {
+  const ss = createReportSpreadsheetFromTemplate_(`Temp_Report_${deptName}_${dateStr}`);
+  const sh = ss.getSheets()[0];
+  fillReportSheet_(sh, deptName, dateStr, orders);
+  SpreadsheetApp.flush();
+  return ss;
+}
+
+function createAllDepartmentsReportFromTemplate_(dateStr, orders, byDept, deptSummary) {
+  const ss = createReportSpreadsheetFromTemplate_(`Temp_Report_Resumen_General_${dateStr}`);
+  const generalSheet = ss.getSheets()[0];
+  const templateSheet = generalSheet.copyTo(ss);
+  templateSheet.setName(makeUniqueSheetName_('__report_template__', getUsedSheetNames_(ss)));
+
+  generalSheet.setName('Resumen general');
+  fillReportSheet_(generalSheet, 'Resumen general', dateStr, orders, { preserveTitleCase: true });
+
+  const usedNames = getUsedSheetNames_(ss);
+  deptSummary.forEach(summary => {
+    const sheet = templateSheet.copyTo(ss);
+    const sheetName = makeUniqueSheetName_(summary.name, usedNames);
+    sheet.setName(sheetName);
+    usedNames[sheetName] = true;
+    fillReportSheet_(sheet, summary.name, dateStr, byDept[summary.id] || []);
+  });
+
+  ss.deleteSheet(templateSheet);
+  SpreadsheetApp.flush();
+  return ss;
+}
+
+function fillReportSheet_(sh, deptName, dateStr, orders, options) {
+  const opts = options || {};
+  const title = opts.preserveTitleCase ? String(deptName) : String(deptName).toUpperCase();
 
   // 1. Set Dept Name (B3:M4)
-  sh.getRange("B3:M4").merge().setValue(deptName.toUpperCase())
+  sh.getRange("B3:M4").merge().setValue(title)
     .setHorizontalAlignment("center").setVerticalAlignment("middle");
 
   // 2. Set Date (B5:M5) -> "PEDIDO ALMUERZO : 03/12/2025"
@@ -2447,7 +2732,7 @@ function createReportFromTemplate_(deptName, dateStr, orders) {
     .setFontWeight("bold");
 
   // 3. Set Headers (B7:M7)
-  const headers = ['NO.', 'NOMBRE EMPLEADO', 'CÓDIGO', 'DEPARTAMENTO', 'ARROCES', 'GRANOS', 'CARNES', 'VIVERES', 'ESPECIALIDADES', 'ENSALADAS', 'CALDO', 'OPCION RAPIDA'];
+  const headers = ['NO.', 'NOMBRE EMPLEADO', 'C\u00d3DIGO', 'DEPARTAMENTO', 'ARROCES', 'GRANOS', 'CARNES', 'VIVERES', 'ESPECIALIDADES', 'ENSALADAS', 'CALDO', 'OPCION RAPIDA'];
   sh.getRange("B7:M7").setValues([headers])
     .setFontWeight("bold").setBorder(true, true, true, true, true, true);
 
@@ -2468,20 +2753,10 @@ function createReportFromTemplate_(deptName, dateStr, orders) {
 
   const rows = [];
   orders.forEach((o, i) => {
-     // Get user code if available (need to fetch from user object or pass it)
-     // orders object from getOrdersByDateDetailed_ doesn't have code.
-     // We might need to fetch it or ignore it.
-     // Let's try to get it from cache or efficient lookup if possible.
-     // For now, empty or fetch? fetching one by one is slow.
-     // Optimization: getOrdersByDateDetailed_ could include code.
-
-     // Let's assume we want to fix getOrdersByDateDetailed_ to include Code.
-     // But for now, let's look at the current row structure.
-
      const row = new Array(12).fill('');
      row[0] = i + 1;
      row[1] = o.nombre;
-     row[2] = o.codigo || ''; // Need to ensure 'codigo' is passed
+     row[2] = o.codigo || '';
      row[3] = o.departamento;
 
      const d = o.detail;
@@ -2514,14 +2789,22 @@ function createReportFromTemplate_(deptName, dateStr, orders) {
      const w = sh.getColumnWidth(i);
      sh.setColumnWidth(i, w + 20);
   }
-
-  SpreadsheetApp.flush(); // FORCE SAVE before export
-  return ss;
 }
 
-function exportSheetToPdfBlob_(ss) {
-  const file = DriveApp.getFileById(ss.getId());
-  return file.getAs(MimeType.PDF);
+function exportSheetToPdfBlob_(ss, sheet) {
+  if (!sheet) {
+    const file = DriveApp.getFileById(ss.getId());
+    return file.getAs(MimeType.PDF);
+  }
+
+  const url = `https://docs.google.com/spreadsheets/d/${ss.getId()}/export?format=pdf&gid=${sheet.getSheetId()}&portrait=false&fitw=true&sheetnames=false&printtitle=false&pagenumbers=false&gridlines=false&fzr=false`;
+  const token = ScriptApp.getOAuthToken();
+  const response = UrlFetchApp.fetch(url, {
+    headers: {
+      'Authorization': 'Bearer ' + token
+    }
+  });
+  return response.getBlob();
 }
 
 function exportSheetToExcelBlob_(ss) {
