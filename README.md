@@ -8,6 +8,7 @@ Aplicacion web para gestionar pedidos de almuerzo institucional con Google Apps 
 - Roles de `USUARIO`, `ADMIN_DEP` y `ADMIN_GEN`.
 - Gestion de usuarios, departamentos, menu, dias libres y configuracion del sistema.
 - Recordatorios, cierre diario, respaldos en Drive y reportes por correo.
+- Reporte diario consolidado con detalle por departamento y Excel general con hojas separadas.
 - Resumen del usuario con costo acumulado por almuerzos segun el precio vigente en cada fecha.
 
 ## Estructura base
@@ -37,6 +38,10 @@ Claves importantes en `Config`:
 - `HORA_RECORDATORIO`
 - `ADMIN_EMAILS`
 - `RESPONSIBLES_EMAILS_JSON`
+- `DAILY_REPORT_MODEL_ID`
+- `BACKUP_FOLDER_ID`
+- `TEST_EMAIL_MODE`
+- `TEST_EMAIL_DEST`
 - `PLAN_WEEK_TEXT`
 - `PLAN_WEEK_LIMIT`
 - `MEAL_PRICE_CURRENT`
@@ -84,6 +89,17 @@ Detalles:
 - Los textos del menu se normalizan al guardar y al renderizar para evitar ALL CAPS.
 - Las validaciones criticas siguen ejecutandose en backend antes de guardar pedidos.
 
+## Reportes de cierre y modo prueba
+
+- El cierre diario mantiene los correos por departamento con su Excel individual.
+- Para esos correos, `RESPONSIBLES_EMAILS_JSON` aporta los destinatarios principales (`TO`).
+- En los correos por departamento, la copia queda limitada a los administradores activos de ese departamento (`ADMIN_DEP`). Los administradores generales reciben el resumen consolidado.
+- El resumen diario para `ADMIN_EMAILS` mantiene el total de pedidos y el CTA al panel administrativo, agrega una tabla de pedidos por departamento y adjunta un Excel consolidado.
+- El Excel consolidado usa la plantilla de `DAILY_REPORT_MODEL_ID`: la primera hoja es `Resumen general` con todos los pedidos continuos, y las hojas siguientes separan los pedidos por departamento.
+- Las hojas generadas escriben la tabla desde la columna `A`, no inmovilizan filas ni columnas, alinean `NOMBRE EMPLEADO` a la izquierda y calculan un alto minimo por fila para evitar truncar textos envueltos.
+- En Drive se siguen guardando los PDF por departamento y ahora tambien se guarda un PDF del `Resumen general`.
+- Si `TEST_EMAIL_MODE` esta en `TRUE`, los correos se redirigen a `TEST_EMAIL_DEST` y el flujo de prueba no guarda respaldos, no ejecuta mantenimiento y no deja cierre real. En el panel administrativo aparece un boton para enviar esos correos de prueba desde `CONFIG`.
+
 ## Arquitectura de rendimiento
 
 - La app embebe el bootstrap inicial (`apiGetInitData`) directamente desde `doGet()`, evitando una llamada extra `google.script.run` al abrir la app por primera vez.
@@ -100,6 +116,7 @@ Detalles:
 - El detalle persistido de cada pedido guarda solo `categorias`, `items` y `comentarios`, reduciendo el peso del write y del parse posterior en bootstrap.
 - La cancelacion y modificacion de pedidos reutilizan la misma fila del pedido cuando existe y marcan `CANCELADO` en sitio, evitando `deleteRow()` y reescrituras costosas de la hoja.
 - La imagen decorativa del footer usa cache y prioriza un `data:` URL generado desde Drive, con fallback a `thumbnailLink` para no perder compatibilidad visual.
+- El cierre diario reutiliza una sola lectura de pedidos, usuarios y departamentos para generar reportes por departamento, resumen consolidado y correo ejecutivo.
 
 ## Despliegue
 
