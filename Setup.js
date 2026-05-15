@@ -59,12 +59,33 @@ function setupSheetsAndConfig(){
   });
 
   populateDefaultConfig_(ss.getSheetByName('Config'));
+  ensureMenuDayEndpointToken_(ss.getSheetByName('Config'));
   ensureBackupFolder_(ss.getSheetByName('Config'));
   populateSampleData_(ss); // Datos de prueba para que arranques rápido
   
   SpreadsheetApp.flush();
   Logger.log('Estructura de base de datos actualizada correctamente.');
   return 'OK';
+}
+
+function ensureMenuDayEndpointToken_(configSheet) {
+  if (!configSheet) return;
+
+  const data = configSheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] === 'MENU_DAY_ENDPOINT_TOKEN') {
+      if (!String(data[i][1] || '').trim()) {
+        configSheet.getRange(i + 1, 2).setValue(generateSecretToken_());
+      }
+      return;
+    }
+  }
+
+  configSheet.appendRow([
+    'MENU_DAY_ENDPOINT_TOKEN',
+    generateSecretToken_(),
+    'Token secreto para consumir el endpoint JSON de menu por fecha. Generar y compartir solo con TI.'
+  ]);
 }
 
 function ensureBackupFolder_(configSheet) {
@@ -124,6 +145,7 @@ function populateDefaultConfig_(sheet){
     ['CALDO_MULTI_HINT_EXPIRES_ON', hintExpiry, 'Fecha limite para mostrar el hint de multiseleccion en Caldo (YYYY-MM-DD).'],
     ['MEAL_PRICE_CURRENT', '57', 'Costo actual por almuerzo. Al cambiarlo se conserva historial automatico por fecha.'],
     ['MEAL_PRICE_HISTORY_JSON', '[{"from":"1900-01-01","price":57}]', 'Historial auto-administrado del costo por almuerzo. No editar manualmente.'],
+    ['MENU_DAY_ENDPOINT_TOKEN', generateSecretToken_(), 'Token secreto para consumir el endpoint JSON de menu por fecha. Generar y compartir solo con TI.'],
     ['DAILY_REPORT_MODEL_ID', '', 'ID del archivo modelo Excel para reportes diarios'],
     ['LOGO_ID', '', 'ID del archivo de imagen del Logo en Drive'],
     ['APP_URL', '', 'URL pública de la aplicación (Web App) para enlaces en correos']

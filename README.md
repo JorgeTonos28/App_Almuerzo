@@ -41,6 +41,7 @@ Claves importantes en `Config`:
 - `PLAN_WEEK_LIMIT`
 - `MEAL_PRICE_CURRENT`
 - `MEAL_PRICE_HISTORY_JSON`
+- `MENU_DAY_ENDPOINT_TOKEN`
 - `SUMMARY_COST_HINT_LIMIT`
 - `SUMMARY_COST_HINT_EXPIRES_ON`
 - `CALDO_MULTI_HINT_LIMIT`
@@ -60,6 +61,22 @@ Notas sobre hints:
 - Los contadores de dismiss viven en `Usuarios.preferencias_json`, no en la hoja `Config`.
 - Los hints visibles se renderizan dentro de su propia seccion para que desaparezcan naturalmente al hacer scroll o cambiar de modulo.
 - El hint de costo acumulado queda anclado al card de costo dentro del resumen semanal/diario.
+
+## Endpoint JSON de menu por fecha
+
+La Web App expone un endpoint de solo lectura para integracion con TI:
+
+`GET {APP_URL}?endpoint=menu-dia&fecha=YYYY-MM-DD&token={MENU_DAY_ENDPOINT_TOKEN}`
+
+Detalles:
+
+- `fecha` tambien puede enviarse como `date`.
+- `token` debe coincidir con la clave `MENU_DAY_ENDPOINT_TOKEN` de la hoja `Config`.
+- Si `MENU_DAY_ENDPOINT_TOKEN` esta vacio, el endpoint queda deshabilitado.
+- La respuesta incluye solo platos habilitados (`habilitado = SI`) de la hoja `Menu`.
+- El endpoint devuelve JSON con `ok`, `fecha`, `date`, `label`, `existeMenu`, `exists`, `menu`, `items`, `appVersion` y `generadoEn`.
+- Para consumo server-to-server desde ASP.NET, TI debe llamar este URL desde el backend y no desde el navegador, para no exponer el token.
+- Si el deployment se mantiene con acceso `DOMAIN`, el consumidor debe poder autenticarse como usuario del dominio. Si ASP.NET no puede autenticarse contra Google, publica un deployment compatible con llamadas anonimas y protege el acceso con el token.
 
 ## Reglas operativas de menu
 
