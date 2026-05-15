@@ -1,7 +1,7 @@
 /**
  * Code.gs - Backend V5 (Refactor & New Features)
  */
-const APP_VERSION = 'v7.10';
+const APP_VERSION = 'v7.11';
 
 // === RUTAS E INICIO ===
 
@@ -2720,24 +2720,27 @@ function fillReportSheet_(sh, deptName, dateStr, orders, options) {
   const opts = options || {};
   const title = opts.preserveTitleCase ? String(deptName) : String(deptName).toUpperCase();
 
-  // 1. Set Dept Name (B3:M4)
-  sh.getRange("B3:M4").merge().setValue(title)
+  sh.setFrozenRows(0);
+  sh.setFrozenColumns(0);
+
+  // 1. Set Dept Name (A3:L4)
+  sh.getRange("A3:L4").merge().setValue(title)
     .setHorizontalAlignment("center").setVerticalAlignment("middle");
 
-  // 2. Set Date (B5:M5) -> "PEDIDO ALMUERZO : 03/12/2025"
+  // 2. Set Date (A5:L5) -> "PEDIDO ALMUERZO : 03/12/2025"
   const d = new Date(dateStr + 'T12:00:00');
   const fmtDate = Utilities.formatDate(d, Session.getScriptTimeZone(), 'dd/MM/yyyy');
-  sh.getRange("B5:M5").merge().setValue(`PEDIDO ALMUERZO : ${fmtDate}`)
+  sh.getRange("A5:L5").merge().setValue(`PEDIDO ALMUERZO : ${fmtDate}`)
     .setHorizontalAlignment("center").setVerticalAlignment("middle")
     .setFontWeight("bold");
 
-  // 3. Set Headers (B7:M7)
+  // 3. Set Headers (A7:L7)
   const headers = ['NO.', 'NOMBRE EMPLEADO', 'C\u00d3DIGO', 'DEPARTAMENTO', 'ARROCES', 'GRANOS', 'CARNES', 'VIVERES', 'ESPECIALIDADES', 'ENSALADAS', 'CALDO', 'OPCION RAPIDA'];
-  sh.getRange("B7:M7").setValues([headers])
+  sh.getRange("A7:L7").setValues([headers])
     .setFontWeight("bold").setBorder(true, true, true, true, true, true);
 
   // 4. Populate Data
-  // Mapping categories to columns indices (relative to B, so 0-based index in values array)
+  // Mapping categories to columns indices (relative to A, so 0-based index in values array)
   // Headers: No(0), Nombre(1), Cod(2), Dept(3), Arroz(4), Granos(5), Carnes(6), Viveres(7), Esp(8), Ens(9), Caldo(10), OpRap(11)
 
   const catMap = {
@@ -2773,22 +2776,54 @@ function fillReportSheet_(sh, deptName, dateStr, orders, options) {
   });
 
   if (rows.length > 0) {
-     const range = sh.getRange(8, 2, rows.length, 12); // Start B8
+     const range = sh.getRange(8, 1, rows.length, 12); // Start A8
      range.setValues(rows);
      range.setBorder(true, true, true, true, true, true);
      range.setHorizontalAlignment("center");
      range.setVerticalAlignment("middle");
      range.setWrapStrategy(SpreadsheetApp.WrapStrategy.WRAP);
+     sh.getRange(8, 2, rows.length, 1).setHorizontalAlignment("left");
   }
 
-  sh.setColumnWidth(2, 40); // Fix width for 'NO.' column
-  sh.autoResizeColumns(3, 11); // Auto-resize rest (C-M)
+  applyReportSheetSizing_(sh, rows);
+}
 
-  // Add padding to prevent tight text wrapping
-  for(let i=3; i<=13; i++) {
-     const w = sh.getColumnWidth(i);
-     sh.setColumnWidth(i, w + 20);
-  }
+function applyReportSheetSizing_(sh, rows) {
+  const widths = [42, 185, 78, 170, 120, 120, 145, 125, 155, 165, 145, 150];
+  widths.forEach((width, idx) => sh.setColumnWidth(idx + 1, width));
+  sh.setRowHeight(7, 26);
+
+  if (!rows || rows.length === 0) return;
+
+  SpreadsheetApp.flush();
+  sh.autoResizeRows(8, rows.length);
+
+  rows.forEach((row, idx) => {
+    const sheetRow = idx + 8;
+    const autoHeight = sh.getRowHeight(sheetRow);
+    const targetHeight = Math.max(autoHeight, estimateReportRowHeight_(row, widths));
+    sh.setRowHeight(sheetRow, targetHeight);
+  });
+}
+
+function estimateReportRowHeight_(row, widths) {
+  const lineHeight = 16;
+  const verticalPadding = 10;
+  let maxLines = 1;
+
+  row.forEach((value, idx) => {
+    const text = String(value || '').trim();
+    if (!text) return;
+
+    const width = widths[idx] || 120;
+    const charsPerLine = Math.max(7, Math.floor(width / 7));
+    const lines = text.split(/\r?\n/).reduce((total, line) => {
+      return total + Math.max(1, Math.ceil(String(line).length / charsPerLine));
+    }, 0);
+    maxLines = Math.max(maxLines, lines);
+  });
+
+  return Math.min(110, Math.max(30, verticalPadding + (maxLines * lineHeight)));
 }
 
 function exportSheetToPdfBlob_(ss, sheet) {

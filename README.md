@@ -96,6 +96,7 @@ Detalles:
 - En los correos por departamento, la copia queda limitada a los administradores activos de ese departamento (`ADMIN_DEP`). Los administradores generales reciben el resumen consolidado.
 - El resumen diario para `ADMIN_EMAILS` mantiene el total de pedidos y el CTA al panel administrativo, agrega una tabla de pedidos por departamento y adjunta un Excel consolidado.
 - El Excel consolidado usa la plantilla de `DAILY_REPORT_MODEL_ID`: la primera hoja es `Resumen general` con todos los pedidos continuos, y las hojas siguientes separan los pedidos por departamento.
+- Las hojas generadas escriben la tabla desde la columna `A`, no inmovilizan filas ni columnas, alinean `NOMBRE EMPLEADO` a la izquierda y calculan un alto minimo por fila para evitar truncar textos envueltos.
 - En Drive se siguen guardando los PDF por departamento y ahora tambien se guarda un PDF del `Resumen general`.
 - Si `TEST_EMAIL_MODE` esta en `TRUE`, los correos se redirigen a `TEST_EMAIL_DEST` y el flujo de prueba no guarda respaldos, no ejecuta mantenimiento y no deja cierre real. En el panel administrativo aparece un boton para enviar esos correos de prueba desde `CONFIG`.
 
