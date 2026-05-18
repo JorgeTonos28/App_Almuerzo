@@ -1,7 +1,7 @@
 /**
  * Code.gs - Backend V5 (Refactor & New Features)
  */
-const APP_VERSION = 'v7.11';
+const APP_VERSION = 'v7.12';
 
 // === RUTAS E INICIO ===
 
@@ -2190,12 +2190,15 @@ function saveOrderToSheet_(user, dateStr, selection, creatorEmail) {
 }
 
 function sendEmail_(to, subject, htmlBody, cc, attachments) {
-  const testMode = getConfigValue_('TEST_EMAIL_MODE') === 'TRUE';
-  const testDest = getConfigValue_('TEST_EMAIL_DEST');
+  const testMode = isTestEmailMode_();
+  const testDest = String(getConfigValue_('TEST_EMAIL_DEST') || '').trim();
   const senderName = getConfigValue_('MAIL_SENDER_NAME');
 
   const recipient = testMode ? testDest : to;
-  if (!recipient) return;
+  if (!recipient) {
+    if (testMode) console.warn("TEST_EMAIL_MODE activo sin TEST_EMAIL_DEST. Correo no enviado a destinatarios reales.");
+    return;
+  }
 
   const finalSubject = testMode ? `[TEST] ${subject}` : subject;
 
@@ -2210,7 +2213,15 @@ function sendEmail_(to, subject, htmlBody, cc, attachments) {
   };
 
   if (cc && !testMode) options.cc = cc;
-  if (testMode && cc) options.htmlBody = `<p><strong>[Original CC: ${cc}]</strong></p>` + options.htmlBody;
+  if (testMode) {
+    const originalMeta = [
+      to ? `<strong>Original TO:</strong> ${to}` : '',
+      cc ? `<strong>Original CC:</strong> ${cc}` : ''
+    ].filter(Boolean).join('<br>');
+    if (originalMeta) {
+      options.htmlBody = `<p style="background:#fef3c7;color:#92400e;padding:10px 12px;border-radius:8px;font-size:12px;">${originalMeta}</p>` + options.htmlBody;
+    }
+  }
 
   // Attachments handling (Array)
   if (attachments) options.attachments = attachments;
