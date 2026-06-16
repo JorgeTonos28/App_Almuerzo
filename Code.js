@@ -1,7 +1,9 @@
 /**
  * Code.gs - Backend V5 (Refactor & New Features)
  */
-const APP_VERSION = 'v7.12';
+const APP_VERSION = 'v7.13';
+const SPREADSHEET_RETRY_ATTEMPTS = 4;
+const SPREADSHEET_RETRY_DELAY_MS = 1500;
 
 // === RUTAS E INICIO ===
 
@@ -755,27 +757,17 @@ function runDailyCloseReportEmails_(dateStr, options) {
   let generalExcelBlob = null;
   let generalReportSaved = false;
   if (orders.length > 0) {
-    let generalSS = null;
     try {
-      generalSS = createAllDepartmentsReportFromTemplate_(normalizedDate, orders, byDept, deptSummary);
-      const generalFileName = `[Resumen general - ${fileDate}]`;
-
-      if (!testRun && backupFolder) {
-        const pdfBlob = exportSheetToPdfBlob_(generalSS, generalSS.getSheets()[0]);
-        pdfBlob.setName(`${generalFileName}.pdf`);
-        backupFolder.createFile(pdfBlob);
-        generalReportSaved = true;
-      }
-
-      if (String(getConfigValue_('ADMIN_EMAILS') || '').trim()) {
-        generalExcelBlob = exportSheetToExcelBlob_(generalSS);
-        generalExcelBlob.setName(`${generalFileName}.xlsx`);
-      }
+      const generalArtifacts = createGeneralReportArtifactsWithRetry_(normalizedDate, fileDate, orders, byDept, deptSummary, backupFolder, testRun);
+      generalExcelBlob = generalArtifacts.excelBlob;
+      generalReportSaved = generalArtifacts.reportSaved;
     } catch (e) {
-      console.error(`Error processing general report: ${e.message}`);
-    } finally {
-      trashTempSpreadsheet_(generalSS);
+      console.error(`Error processing general report after retries: ${e.message}`);
     }
+  }
+
+  if (orders.length > 0 && String(getConfigValue_('ADMIN_EMAILS') || '').trim() && !generalExcelBlob) {
+    throw new Error("No se pudo generar el Excel consolidado del resumen general. No se envio el resumen administrativo sin adjunto.");
   }
 
   const adminSummarySent = sendDailyAdminSummary_(normalizedDate, {
@@ -1320,38 +1312,34 @@ function apiDeleteHoliday(dateStr) {
 
 function apiHeartbeat() {
   const user = getUserInfo_();
-  // Si no hay usuario autenticado, salimos
-  if (!user) return { count: null };
+  if (!user || user.estado !== 'ACTIVO') return { count: null };
 
   const lock = LockService.getScriptLock();
-  // Intentamos bloquear por 2s para evitar colisiones de escritura en la caché
-  if (lock.tryLock(2000)) {
+  // Background presence writes use a short lock to avoid cache write collisions.
+  if (lock.tryLock(5000)) {
     try {
       const cache = CacheService.getScriptCache();
-      const KEY = 'ACTIVE_SESSIONS_V1';
+      const KEY = 'ACTIVE_SESSIONS_V2';
       const raw = cache.get(KEY);
       let sessions = raw ? JSON.parse(raw) : {};
       
       const now = Date.now();
-      const TIME_WINDOW = 5 * 60 * 1000; // 5 minutos de inactividad para considerar "offline"
+      const TIME_WINDOW = 5 * 60 * 1000;
 
-      // 1. Registrar/Actualizar al usuario actual
-      sessions[user.email] = now;
+      sessions[String(user.email || '').toLowerCase()] = now;
 
-      // 2. Limpiar usuarios antiguos y contar
       let count = 0;
       const cleanSessions = {};
       Object.keys(sessions).forEach(email => {
-         if (now - sessions[email] < TIME_WINDOW) {
-            cleanSessions[email] = sessions[email];
+         const lastSeen = Number(sessions[email]) || 0;
+         if (now - lastSeen < TIME_WINDOW) {
+            cleanSessions[email] = lastSeen;
             count++;
          }
       });
 
-      // 3. Guardar cambios (TTL de 6 horas para el contenedor)
       cache.put(KEY, JSON.stringify(cleanSessions), 21600);
 
-      // 4. Retornar conteo SOLO si es Administrador General
       if (user.rol === 'ADMIN_GEN') {
          return { count: count };
       }
@@ -2668,6 +2656,94 @@ function trashTempSpreadsheet_(ss) {
   }
 }
 
+function createGeneralReportArtifactsWithRetry_(dateStr, fileDate, orders, byDept, deptSummary, backupFolder, testRun) {
+  return runSpreadsheetTransientRetry_('general daily report', function() {
+    return createGeneralReportArtifacts_(dateStr, fileDate, orders, byDept, deptSummary, backupFolder, testRun);
+  });
+}
+
+function createGeneralReportArtifacts_(dateStr, fileDate, orders, byDept, deptSummary, backupFolder, testRun) {
+  let generalSS = null;
+  try {
+    generalSS = createAllDepartmentsReportFromTemplate_(dateStr, orders, byDept, deptSummary);
+    const generalFileName = `[Resumen general - ${fileDate}]`;
+    let excelBlob = null;
+    let reportSaved = false;
+
+    if (String(getConfigValue_('ADMIN_EMAILS') || '').trim()) {
+      excelBlob = exportSheetToExcelBlob_(generalSS);
+      excelBlob.setName(`${generalFileName}.xlsx`);
+    }
+
+    if (!testRun && backupFolder) {
+      try {
+        const pdfBlob = exportSheetToPdfBlob_(generalSS, generalSS.getSheets()[0]);
+        pdfBlob.setName(`${generalFileName}.pdf`);
+        backupFolder.createFile(pdfBlob);
+        reportSaved = true;
+      } catch (e) {
+        console.error(`Error saving general report PDF backup: ${e.message}`);
+      }
+    }
+
+    return {
+      excelBlob: excelBlob,
+      reportSaved: reportSaved
+    };
+  } finally {
+    trashTempSpreadsheet_(generalSS);
+  }
+}
+
+function runSpreadsheetTransientRetry_(label, operation, options) {
+  const opts = options || {};
+  const attempts = opts.attempts || SPREADSHEET_RETRY_ATTEMPTS;
+  const delayMs = opts.delayMs || SPREADSHEET_RETRY_DELAY_MS;
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return operation(attempt);
+    } catch (e) {
+      lastError = e;
+      if (attempt >= attempts || !isRetryableSpreadsheetError_(e)) throw e;
+      const errorMessage = e && e.message ? e.message : String(e);
+      console.warn(`${label} attempt ${attempt} failed; retrying: ${errorMessage}`);
+      Utilities.sleep(delayMs * attempt);
+    }
+  }
+
+  throw lastError;
+}
+
+function isRetryableSpreadsheetError_(error) {
+  const raw = String(error && error.message ? error.message : error || '').toLowerCase();
+  const msg = raw.normalize ? raw.normalize('NFD').replace(/[\u0300-\u036f]/g, '') : raw;
+  return (
+    msg.indexOf('no ha podido acceder') !== -1 ||
+    msg.indexOf('no puede acceder') !== -1 ||
+    msg.indexOf('could not access') !== -1 ||
+    msg.indexOf('cannot access') !== -1 ||
+    msg.indexOf('servicio hojas de calculo') !== -1 ||
+    msg.indexOf('service spreadsheets') !== -1 ||
+    msg.indexOf('returned code 5') !== -1 ||
+    msg.indexOf('returned code 429') !== -1 ||
+    msg.indexOf('timed out') !== -1 ||
+    msg.indexOf('timeout') !== -1 ||
+    msg.indexOf('backend error') !== -1 ||
+    msg.indexOf('rate limit') !== -1
+  );
+}
+
+function openSpreadsheetByIdWithRetry_(ssId, label) {
+  return runSpreadsheetTransientRetry_(label || `open spreadsheet ${ssId}`, function() {
+    return SpreadsheetApp.openById(ssId);
+  }, {
+    attempts: SPREADSHEET_RETRY_ATTEMPTS,
+    delayMs: SPREADSHEET_RETRY_DELAY_MS
+  });
+}
+
 function createReportSpreadsheetFromTemplate_(reportName) {
   const templateId = getConfigValue_('DAILY_REPORT_MODEL_ID');
   if (!templateId) throw new Error("Falta configurar DAILY_REPORT_MODEL_ID");
@@ -2693,7 +2769,16 @@ function createReportSpreadsheetFromTemplate_(reportName) {
      }
   }
 
-  return SpreadsheetApp.openById(ssId);
+  try {
+    return openSpreadsheetByIdWithRetry_(ssId, `open report spreadsheet ${reportName}`);
+  } catch (e) {
+    try {
+      DriveApp.getFileById(ssId).setTrashed(true);
+    } catch (cleanupError) {
+      console.error("Error cleaning inaccessible temp report: " + cleanupError.message);
+    }
+    throw e;
+  }
 }
 
 function createReportFromTemplate_(deptName, dateStr, orders) {

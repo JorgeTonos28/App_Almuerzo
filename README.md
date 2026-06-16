@@ -96,6 +96,7 @@ Detalles:
 - En los correos por departamento, la copia queda limitada a los administradores activos de ese departamento (`ADMIN_DEP`). Los administradores generales reciben el resumen consolidado.
 - El resumen diario para `ADMIN_EMAILS` mantiene el total de pedidos y el CTA al panel administrativo, agrega una tabla de pedidos por departamento y adjunta un Excel consolidado.
 - El Excel consolidado usa la plantilla de `DAILY_REPORT_MODEL_ID`: la primera hoja es `Resumen general` con todos los pedidos continuos, y las hojas siguientes separan los pedidos por departamento.
+- La generacion del Excel consolidado reintenta accesos transitorios a la hoja temporal antes de fallar. Si hay pedidos y no se logra generar el XLSX esperado, el resumen administrativo no se envia sin adjunto.
 - Las hojas generadas escriben la tabla desde la columna `A`, no inmovilizan filas ni columnas, alinean `NOMBRE EMPLEADO` a la izquierda y calculan un alto minimo por fila para evitar truncar textos envueltos.
 - En Drive se siguen guardando los PDF por departamento y ahora tambien se guarda un PDF del `Resumen general`.
 - Si `TEST_EMAIL_MODE` esta en `TRUE` (sin importar mayusculas o espacios), todos los correos se redirigen solo a `TEST_EMAIL_DEST`; si falta ese destino, no se envian a destinatarios reales. El flujo de prueba no guarda respaldos, no ejecuta mantenimiento y no deja cierre real. En el panel administrativo aparece un boton para enviar esos correos de prueba desde `CONFIG`.
@@ -110,7 +111,8 @@ Detalles:
 - El calculo de fechas abiertas y menus disponibles usa cache corta independiente para no reconstruir el bundle completo en cada request.
 - La verificacion de claves operativas de `Config` se hace en lote y con cache corta, para no escanear la hoja varias veces por request.
 - El panel administrativo se precarga en segundo plano para usuarios admin y asi la transicion a esa vista se siente mas rapida.
-- El heartbeat de usuarios activos se reserva para `ADMIN_GEN`; no corre como roundtrip inicial para usuarios normales.
+- El heartbeat registra en segundo plano a todos los usuarios activos para que el contador sea representativo; solo `ADMIN_GEN` recibe y ve el total.
+- Las acciones administrativas que refrescan el panel despues de guardar mantienen el spinner hasta que termina tambien esa recarga.
 - El resumen semanal/diario entra en scroll vertical cuando supera 8 cards para evitar crecimiento excesivo de la pagina.
 - El guardado de pedidos evita escanear toda la hoja `Pedidos` antes de escribir: usa un ID deterministico por usuario/fecha y lookup puntual sobre la columna de IDs.
 - El detalle persistido de cada pedido guarda solo `categorias`, `items` y `comentarios`, reduciendo el peso del write y del parse posterior en bootstrap.
