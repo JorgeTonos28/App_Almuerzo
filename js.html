@@ -71,7 +71,7 @@ createApp({
     };
 
     const startHeartbeat = () => {
-       if (activeUser.value?.rol !== 'ADMIN_GEN') return;
+       if (!activeUser.value?.email) return;
        if (heartbeatTimer.value) return;
        runHeartbeat();
        heartbeatTimer.value = window.setInterval(runHeartbeat, 45000);
@@ -502,7 +502,7 @@ createApp({
       hintConfig.value = res.hintConfig || hintConfig.value;
       todayYmd.value = res.todayYmd || todayYmd.value;
       hasFocusedSummaryCostHint.value = false;
-      if (res.activeUser?.rol === 'ADMIN_GEN') startHeartbeat();
+      if (res.activeUser?.email) startHeartbeat();
       else stopHeartbeat();
 
       currentDate.value = res.currentDate;
@@ -622,7 +622,7 @@ createApp({
     };
 
     const loadAdminData = (force = false, options = {}) => {
-       if (adminState.loading) return;
+       if (adminState.loading && !options.allowWhileLoading) return;
        if (!force && adminState.users.length > 0) return;
        adminState.loading = true;
        google.script.run
@@ -657,6 +657,10 @@ createApp({
          .apiGetAdminData();
     };
 
+    const reloadAdminDataAfterAction = () => {
+       loadAdminData(true, { allowWhileLoading: true });
+    };
+
     // Admin Actions
     const openUserModal = (u = null) => {
        adminState.userModal.isNew = !u;
@@ -675,16 +679,20 @@ createApp({
 
        adminState.loading = true;
        google.script.run
-         .withSuccessHandler(res => {
-            adminState.loading = false;
-            if(res.ok) {
-               adminState.userModal.open = false;
-               loadAdminData(true);
-            } else {
-               showModal(res.msg, "Error");
-            }
-         })
-         .apiAdminSaveUser(adminState.userModal.data);
+          .withSuccessHandler(res => {
+             if(res.ok) {
+                adminState.userModal.open = false;
+                reloadAdminDataAfterAction();
+             } else {
+                adminState.loading = false;
+                showModal(res.msg, "Error");
+             }
+          })
+          .withFailureHandler(err => {
+             adminState.loading = false;
+             showModal(err.message || "Error guardando el usuario.", "Error");
+          })
+          .apiAdminSaveUser(adminState.userModal.data);
     };
 
     const toggleUserStatus = (u) => {
@@ -695,18 +703,34 @@ createApp({
           const payload = { ...u, estado: newState, departamento: u.departamentoId }; 
           
           adminState.loading = true;
-          google.script.run.withSuccessHandler(() => { loadAdminData(true); }).apiAdminSaveUser(payload);
-       });
+          google.script.run
+            .withSuccessHandler(res => {
+               if(res && res.ok) {
+                  reloadAdminDataAfterAction();
+               } else {
+                  adminState.loading = false;
+                  showModal((res && res.msg) || "No se pudo cambiar el estado del usuario.", "Error");
+               }
+            })
+            .withFailureHandler(err => {
+               adminState.loading = false;
+               showModal(err.message || "Error cambiando el estado del usuario.", "Error");
+            })
+            .apiAdminSaveUser(payload);
+        });
     };
 
     const adminCancelOrder = (orderId) => {
        showModal("¿Estás seguro de cancelar este pedido?", "Cancelar Pedido", "CONFIRM", () => {
-          adminState.loading = true;
-          google.script.run.withSuccessHandler(res => {
-             if(res.ok) loadAdminData(true);
-             else { showModal(res.msg, "Error"); adminState.loading = false; }
-          }).apiAdminCancelOrder(orderId);
-       });
+           adminState.loading = true;
+           google.script.run.withSuccessHandler(res => {
+              if(res.ok) reloadAdminDataAfterAction();
+              else { showModal(res.msg, "Error"); adminState.loading = false; }
+           }).withFailureHandler(err => {
+              adminState.loading = false;
+              showModal(err.message || "Error cancelando el pedido.", "Error");
+           }).apiAdminCancelOrder(orderId);
+        });
     };
 
     // Department Actions
@@ -729,7 +753,20 @@ createApp({
     const deleteDept = (id) => {
        showModal("¿Eliminar departamento? Esta acción no se puede deshacer.", "Eliminar Depto", "CONFIRM", () => {
            adminState.loading = true;
-           google.script.run.withSuccessHandler(res => { if(res.ok) loadAdminData(true); else showModal(res.msg, "Error"); adminState.loading = false; }).apiDeleteDepartment(id);
+           google.script.run
+              .withSuccessHandler(res => {
+                 if(res.ok) {
+                    reloadAdminDataAfterAction();
+                 } else {
+                    adminState.loading = false;
+                    showModal(res.msg, "Error");
+                 }
+              })
+              .withFailureHandler(err => {
+                 adminState.loading = false;
+                 showModal(err.message || "Error eliminando el departamento.", "Error");
+              })
+              .apiDeleteDepartment(id);
        });
     };
 
