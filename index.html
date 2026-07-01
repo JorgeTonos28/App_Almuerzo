@@ -623,25 +623,24 @@
                <!-- Responsibles Editor -->
                <div class="mt-8">
                   <h3 class="font-bold text-sm text-gray-900 mb-4 flex items-center gap-2">
-                     <i class="fa-solid fa-users-gear text-gray-400"></i> Responsables (Reportes Diarios)
+                     <i class="fa-solid fa-envelope-circle-check text-gray-400"></i> Responsables (Resumen Diario)
                   </h3>
                   <div class="bg-gray-50 border border-gray-200 rounded-xl overflow-hidden p-4">
-                     <p class="text-xs text-gray-500 mb-4">Los principales reciben reportes por departamento. La copia de esos correos queda reservada al admin departamental.</p>
+                     <p class="text-xs text-gray-500 mb-4">Estos correos se agregan como copia (CC) al resumen diario enviado a ADMIN_EMAILS con el Excel consolidado adjunto. No otorgan acceso a la plataforma.</p>
 
                      <div class="space-y-3">
-                        <div v-for="(r, idx) in adminState.responsiblesList" :key="idx" class="flex gap-2 items-center">
-                           <input :disabled="!adminState.configEdit" v-model="r.name" type="text" placeholder="Nombre" class="w-1/3 bg-white border border-gray-200 rounded px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-blue-500">
-                           <input :disabled="!adminState.configEdit" v-model="r.email" type="email" placeholder="Correo" class="w-1/3 bg-white border border-gray-200 rounded px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-blue-500">
-                           <select :disabled="!adminState.configEdit" v-model="r.type" class="w-1/4 bg-white border border-gray-200 rounded px-2 py-1.5 text-xs outline-none">
-                              <option value="TO">Principal (Para)</option>
-                              <option value="CC">Copia (CC)</option>
-                           </select>
-                           <button v-if="adminState.configEdit" @click="removeResponsible(idx)" class="text-red-500 hover:bg-red-50 p-1.5 rounded"><i class="fa-solid fa-trash"></i></button>
+                        <div v-if="adminState.responsiblesList.length === 0" class="text-xs text-gray-400 bg-white border border-dashed border-gray-200 rounded-lg px-3 py-3">
+                           Sin correos configurados.
+                        </div>
+                        <div v-for="(email, idx) in adminState.responsiblesList" :key="idx" class="flex flex-col sm:flex-row gap-2 sm:items-center">
+                           <input :disabled="!adminState.configEdit" v-model="adminState.responsiblesList[idx]" type="email" placeholder="correo@ejemplo.com" class="flex-1 min-w-0 bg-white border border-gray-200 rounded px-2 py-2 text-xs outline-none focus:ring-1 focus:ring-blue-500 disabled:text-gray-500">
+                           <span class="hidden sm:inline-flex text-[10px] font-bold uppercase tracking-wide text-gray-400 px-2">CC</span>
+                           <button v-if="adminState.configEdit" @click="removeResponsible(idx)" class="self-start sm:self-auto text-red-500 hover:bg-red-50 p-2 rounded" title="Eliminar correo"><i class="fa-solid fa-trash"></i></button>
                         </div>
                      </div>
 
                      <button v-if="adminState.configEdit" @click="addResponsible" class="mt-4 text-blue-600 hover:bg-blue-50 text-xs font-bold py-2 px-4 rounded-lg flex items-center gap-2">
-                        <i class="fa-solid fa-plus"></i> Agregar Responsable
+                        <i class="fa-solid fa-plus"></i> Agregar correo
                      </button>
                   </div>
                </div>

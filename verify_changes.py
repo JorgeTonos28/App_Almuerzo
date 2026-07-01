@@ -38,7 +38,7 @@ def test_admin_features(page):
                  ],
                  orders: [],
                  departments: [],
-                 config: { 'RESPONSIBLES_EMAILS_JSON': '[{"name":"Resp1","email":"r1@test.com","type":"TO"}]' },
+                 config: { 'RESPONSIBLES_EMAILS_JSON': '["r1@test.com"]' },
                  holidays: [],
                  configList: [{key: 'RESPONSIBLES_EMAILS_JSON', value: '...', desc: 'JSON'}]
                });
@@ -88,7 +88,7 @@ def test_admin_features(page):
     inputs = page.locator("input").all()
     found = False
     for inp in inputs:
-        if inp.input_value() == "Resp1":
+        if inp.input_value() == "r1@test.com":
              found = True
              break
 
@@ -100,13 +100,13 @@ def test_admin_features(page):
          # print(page.content())
 
     # Add new Responsible
-    page.get_by_text("Agregar Responsable").click()
+    page.get_by_text("Agregar correo").click()
     page.wait_for_timeout(200)
 
     # Fill last name input
-    inputs = page.locator("input[placeholder='Nombre']").all()
+    inputs = page.locator("input[placeholder='correo@ejemplo.com']").all()
     if len(inputs) > 0:
-        inputs[-1].fill("NewResp")
+        inputs[-1].fill("newresp@test.com")
 
     # Save Config
     page.get_by_text("Guardar").click()

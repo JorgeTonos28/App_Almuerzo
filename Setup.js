@@ -136,7 +136,7 @@ function populateDefaultConfig_(sheet){
     ['BACKUP_FOLDER_ID', '', 'ID de carpeta Drive raíz para respaldos (Año/Mes/Semana)'],
     ['TEST_EMAIL_MODE', 'FALSE', 'Si es TRUE, todos los correos van a la dirección de prueba'],
     ['TEST_EMAIL_DEST', '', 'Correo de destino para modo de prueba'],
-    ['RESPONSIBLES_EMAILS_JSON', '{}', 'JSON mapeo DeptoID->Emails.'],
+    ['RESPONSIBLES_EMAILS_JSON', '[]', 'JSON de correos externos en copia para el resumen diario general.'],
     ['PLAN_WEEK_TEXT', '¡Planifica tu semana! Ahora puedes adelantar tus pedidos para todos los días disponibles.', 'Texto del banner de planificación'],
     ['PLAN_WEEK_LIMIT', '5', 'Número de veces que se mostrará el banner al usuario'],
     ['SUMMARY_COST_HINT_LIMIT', '3', 'Cantidad maxima de cierres del hint del costo acumulado antes de ocultarlo.'],

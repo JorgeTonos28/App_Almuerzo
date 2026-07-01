@@ -1,7 +1,7 @@
 /**
  * Code.gs - Backend V5 (Refactor & New Features)
  */
-const APP_VERSION = 'v7.13';
+const APP_VERSION = 'v7.14';
 const SPREADSHEET_RETRY_ATTEMPTS = 4;
 const SPREADSHEET_RETRY_DELAY_MS = 1500;
 
@@ -698,7 +698,6 @@ function runDailyCloseReportEmails_(dateStr, options) {
   const byDept = groupOrdersByDepartment_(orders);
   const deptSummary = getDepartmentOrderSummary_(byDept, deptMap);
   const backupFolder = (!testRun && orders.length > 0) ? getDailyBackupFolder_(normalizedDate) : null;
-  const configRecipients = getReportRecipientsConfig_();
   const deptAdminsMap = getDepartmentAdminsMap_(usersData);
   const formattedDate = Utilities.formatDate(new Date(normalizedDate + 'T12:00:00'), Session.getScriptTimeZone(), 'dd/MM/yyyy');
   const fileDate = Utilities.formatDate(new Date(normalizedDate + 'T12:00:00'), Session.getScriptTimeZone(), 'dd-MM-yyyy');
@@ -710,7 +709,7 @@ function runDailyCloseReportEmails_(dateStr, options) {
     const deptId = summary.id;
     const deptName = summary.name;
     const deptOrders = byDept[deptId] || [];
-    const recipients = getDepartmentReportRecipients_(deptId, configRecipients, deptAdminsMap);
+    const recipients = getDepartmentReportRecipients_(deptId, deptAdminsMap);
     const fileName = `[${deptName} - ${fileDate}]`;
     let tempSS = null;
 
@@ -774,6 +773,7 @@ function runDailyCloseReportEmails_(dateStr, options) {
     orders: orders,
     deptSummary: deptSummary,
     attachments: generalExcelBlob ? [generalExcelBlob] : [],
+    copyRecipients: getDailySummaryCopyRecipients_(),
     testRun: testRun
   });
 
@@ -887,6 +887,11 @@ function apiSaveConfig(configData) {
      if (!admin || admin.rol !== 'ADMIN_GEN') throw new Error("Permiso denegado.");
 
      ensureOperationalConfigKeys_();
+     if (configData.RESPONSIBLES_EMAILS_JSON !== undefined) {
+        const summaryCopies = normalizeDailySummaryCopyRecipients_(configData.RESPONSIBLES_EMAILS_JSON, { throwOnInvalid: true });
+        configData.RESPONSIBLES_EMAILS_JSON = JSON.stringify(summaryCopies);
+     }
+
      const ss = SpreadsheetApp.getActive();
      const sh = ss.getSheetByName('Config');
      const data = sh.getDataRange().getValues();
@@ -1603,6 +1608,7 @@ function getOperationalConfigDefinitions_() {
     { key: 'MEAL_PRICE_CURRENT', value: '57', description: 'Costo actual por almuerzo. Al cambiarlo se conserva historial automatico por fecha.' },
     { key: 'MEAL_PRICE_HISTORY_JSON', value: '[{"from":"1900-01-01","price":57}]', description: 'Historial auto-administrado del costo por almuerzo. No editar manualmente.' },
     { key: 'MENU_DAY_ENDPOINT_TOKEN', value: generateSecretToken_(), description: 'Token secreto para consumir el endpoint JSON de menu por fecha. Generar y compartir solo con TI.' },
+    { key: 'RESPONSIBLES_EMAILS_JSON', value: '[]', description: 'JSON de correos externos en copia para el resumen diario general.' },
     { key: 'SUMMARY_COST_HINT_LIMIT', value: '3', description: 'Cantidad maxima de cierres del hint del costo acumulado antes de ocultarlo.' },
     { key: 'SUMMARY_COST_HINT_EXPIRES_ON', value: defaultExpiry, description: 'Fecha limite para mostrar el hint del costo acumulado (YYYY-MM-DD).' },
     { key: 'CALDO_MULTI_HINT_LIMIT', value: '3', description: 'Cantidad maxima de cierres del hint de multiseleccion en Caldo.' },
@@ -2393,6 +2399,9 @@ function sendDailyAdminSummary_(dateStr, context) {
   if (count > 0) {
      const deptSummary = ctx.deptSummary || getDepartmentOrderSummary_(groupOrdersByDepartment_(orders), getDepartmentMap_());
      const attachments = ctx.attachments || [];
+     const copyRecipients = ctx.copyRecipients !== undefined
+       ? joinEmailList_(ctx.copyRecipients)
+       : getDailySummaryCopyRecipients_();
      const formattedDate = Utilities.formatDate(new Date(dateStr + 'T12:00:00'), Session.getScriptTimeZone(), 'dd/MM/yyyy');
      const departmentTable = buildDepartmentSummaryTableHtml_(deptSummary);
      const html = getEmailTemplate_({
@@ -2411,7 +2420,7 @@ function sendDailyAdminSummary_(dateStr, context) {
         cta: { text: 'Ver Panel Administrativo', url: getAppUrl_() },
         footerNote: ctx.testRun ? 'Correo de prueba. No se generaron respaldos permanentes.' : ''
      });
-    sendEmail_(admins, `Almuerzo Pre-empacado | Resumen Pedidos ${dateStr}`, html, null, attachments);
+    sendEmail_(admins, `Almuerzo Pre-empacado | Resumen Pedidos ${dateStr}`, html, copyRecipients, attachments);
     return true;
   }
   return false;
@@ -2496,36 +2505,106 @@ function getReportRecipientsConfig_() {
   try {
     return JSON.parse(rawConfig);
   } catch(e) {
-    return null;
+    return rawConfig;
   }
 }
 
-function getConfiguredReportRecipientsForDept_(deptId, configRecipients) {
-  let list = [];
-  if (Array.isArray(configRecipients)) {
-    list = configRecipients;
-  } else if (configRecipients && typeof configRecipients === 'object' && Array.isArray(configRecipients[deptId])) {
-    list = configRecipients[deptId];
+function getDailySummaryCopyRecipients_() {
+  const adminSet = {};
+  uniqueEmailList_(getConfigValue_('ADMIN_EMAILS')).forEach(email => {
+    adminSet[email] = true;
+  });
+
+  return joinEmailList_(normalizeDailySummaryCopyRecipients_(getReportRecipientsConfig_())
+    .filter(email => !adminSet[email]));
+}
+
+function normalizeDailySummaryCopyRecipients_(value, options) {
+  const opts = options || {};
+  const candidates = collectReportRecipientEmailCandidates_(parseReportRecipientsValue_(value));
+  const valid = [];
+  const invalid = [];
+
+  candidates.forEach(email => {
+    if (isValidEmailAddress_(email)) {
+      valid.push(email);
+    } else {
+      invalid.push(email);
+    }
+  });
+
+  if (invalid.length > 0) {
+    const msg = 'Corrige los correos de responsables del resumen diario: ' + uniqueEmailList_(invalid).join(', ');
+    if (opts.throwOnInvalid) throw new Error(msg);
+    console.warn(msg);
   }
 
-  return {
-    to: uniqueEmailList_(list
-      .filter(r => String(r && r.type || 'TO').toUpperCase() === 'TO')
-      .map(getRecipientEmail_)),
-    cc: uniqueEmailList_(list
-      .filter(r => String(r && r.type || '').toUpperCase() === 'CC')
-      .map(getRecipientEmail_))
+  return uniqueEmailList_(valid);
+}
+
+function parseReportRecipientsValue_(value) {
+  if (typeof value !== 'string') return value || [];
+  const trimmed = value.trim();
+  if (!trimmed) return [];
+
+  try {
+    return JSON.parse(trimmed);
+  } catch(e) {
+    return trimmed;
+  }
+}
+
+function collectReportRecipientEmailCandidates_(value) {
+  const result = [];
+
+  const collect = item => {
+    if (!item) return;
+
+    if (typeof item === 'string') {
+      String(item)
+        .split(/[;,]/)
+        .map(email => email.trim().toLowerCase())
+        .filter(email => email)
+        .forEach(email => result.push(email));
+      return;
+    }
+
+    if (Array.isArray(item)) {
+      item.forEach(collect);
+      return;
+    }
+
+    if (typeof item === 'object') {
+      const directEmail = getRecipientEmail_(item);
+      if (directEmail) {
+        collect(directEmail);
+        return;
+      }
+
+      if (item.emails) {
+        collect(item.emails);
+        return;
+      }
+
+      Object.keys(item).forEach(key => {
+        const nested = item[key];
+        if (Array.isArray(nested) || (nested && typeof nested === 'object')) collect(nested);
+      });
+    }
   };
+
+  collect(value);
+  return result;
 }
 
-function getDepartmentReportRecipients_(deptId, configRecipients, deptAdminsMap) {
-  const configured = getConfiguredReportRecipientsForDept_(deptId, configRecipients);
-  const toList = configured.to;
-  const deptAdmins = uniqueEmailList_((deptAdminsMap[deptId] || []).filter(email => toList.indexOf(email) === -1));
+function isValidEmailAddress_(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim());
+}
 
+function getDepartmentReportRecipients_(deptId, deptAdminsMap) {
   return {
-    to: joinEmailList_(toList),
-    cc: joinEmailList_(deptAdmins)
+    to: joinEmailList_(deptAdminsMap[deptId] || []),
+    cc: ''
   };
 }
 

@@ -91,10 +91,11 @@ Detalles:
 
 ## Reportes de cierre y modo prueba
 
-- El cierre diario mantiene los correos por departamento con su Excel individual.
-- Para esos correos, `RESPONSIBLES_EMAILS_JSON` aporta los destinatarios principales (`TO`).
-- En los correos por departamento, la copia queda limitada a los administradores activos de ese departamento (`ADMIN_DEP`). Los administradores generales reciben el resumen consolidado.
-- El resumen diario para `ADMIN_EMAILS` mantiene el total de pedidos y el CTA al panel administrativo, agrega una tabla de pedidos por departamento y adjunta un Excel consolidado.
+- El cierre diario mantiene los correos por departamento con su Excel individual para los administradores activos de cada departamento (`ADMIN_DEP`).
+- `ADMIN_EMAILS` define los destinatarios principales (`TO`) del resumen diario general y sigue controlando el acceso administrativo a la plataforma.
+- `RESPONSIBLES_EMAILS_JSON` ahora guarda solo una lista JSON de correos externos que se agregan como copia (`CC`) al resumen diario general. Estos correos no otorgan acceso a la plataforma ni reciben solicitudes de acceso.
+- Formato manual esperado para `RESPONSIBLES_EMAILS_JSON`: `["proveedor@ejemplo.com","cocina@ejemplo.com"]`.
+- El resumen diario general mantiene el total de pedidos y el CTA al panel administrativo, agrega una tabla de pedidos por departamento y adjunta un Excel consolidado.
 - El Excel consolidado usa la plantilla de `DAILY_REPORT_MODEL_ID`: la primera hoja es `Resumen general` con todos los pedidos continuos, y las hojas siguientes separan los pedidos por departamento.
 - La generacion del Excel consolidado reintenta accesos transitorios a la hoja temporal antes de fallar. Si hay pedidos y no se logra generar el XLSX esperado, el resumen administrativo no se envia sin adjunto.
 - Las hojas generadas escriben la tabla desde la columna `A`, no inmovilizan filas ni columnas, alinean `NOMBRE EMPLEADO` a la izquierda y calculan un alto minimo por fila para evitar truncar textos envueltos.

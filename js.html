@@ -621,6 +621,78 @@ createApp({
        }
     };
 
+    const parseResponsibleEmailsValue = (value) => {
+       if (typeof value !== 'string') return value || [];
+       const trimmed = value.trim();
+       if (!trimmed) return [];
+       try {
+          return JSON.parse(trimmed);
+       } catch(e) {
+          return trimmed;
+       }
+    };
+
+    const collectResponsibleEmailCandidates = (value) => {
+       const result = [];
+       const collect = (item) => {
+          if (!item) return;
+          if (typeof item === 'string') {
+             item.split(/[;,]/)
+               .map(email => email.trim().toLowerCase())
+               .filter(email => email)
+               .forEach(email => result.push(email));
+             return;
+          }
+          if (Array.isArray(item)) {
+             item.forEach(collect);
+             return;
+          }
+          if (typeof item === 'object') {
+             const directEmail = item.email || item.mail;
+             if (directEmail) {
+                collect(directEmail);
+                return;
+             }
+             if (item.emails) {
+                collect(item.emails);
+                return;
+             }
+             Object.keys(item).forEach(key => {
+                const nested = item[key];
+                if (Array.isArray(nested) || (nested && typeof nested === 'object')) collect(nested);
+             });
+          }
+       };
+       collect(parseResponsibleEmailsValue(value));
+       return result;
+    };
+
+    const isValidResponsibleEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
+
+    const normalizeResponsibleEmails = (value, options = {}) => {
+       const seen = {};
+       const valid = [];
+       const invalid = [];
+
+       collectResponsibleEmailCandidates(value).forEach(email => {
+          if (!isValidResponsibleEmail(email)) {
+             invalid.push(email);
+             return;
+          }
+          if (!seen[email]) {
+             seen[email] = true;
+             valid.push(email);
+          }
+       });
+
+       if (invalid.length && options.throwOnInvalid) {
+          const uniqueInvalid = [...new Set(invalid)];
+          throw new Error(`Corrige los correos de responsables del resumen diario: ${uniqueInvalid.join(', ')}`);
+       }
+
+       return valid;
+    };
+
     const loadAdminData = (force = false, options = {}) => {
        if (adminState.loading && !options.allowWhileLoading) return;
        if (!force && adminState.users.length > 0) return;
@@ -637,10 +709,7 @@ createApp({
                adminState.configKeys = res.configKeys || [];
                adminState.holidays = res.holidays || [];
 
-               try {
-                  adminState.responsiblesList = JSON.parse(adminState.config['RESPONSIBLES_EMAILS_JSON'] || '[]');
-                  if (!Array.isArray(adminState.responsiblesList)) adminState.responsiblesList = [];
-               } catch(e) { adminState.responsiblesList = []; }
+               adminState.responsiblesList = normalizeResponsibleEmails(adminState.config['RESPONSIBLES_EMAILS_JSON']);
 
                // Also populate dept map from list
                const map = {};
@@ -773,7 +842,14 @@ createApp({
     // Config Actions
     const saveConfig = () => {
        const payload = { ...adminState.config };
-       payload['RESPONSIBLES_EMAILS_JSON'] = JSON.stringify(adminState.responsiblesList);
+       let responsibleEmails = [];
+       try {
+          responsibleEmails = normalizeResponsibleEmails(adminState.responsiblesList, { throwOnInvalid: true });
+       } catch (e) {
+          showModal(e.message || "Corrige los correos de responsables del resumen diario.", "Configuracion");
+          return;
+       }
+       payload['RESPONSIBLES_EMAILS_JSON'] = JSON.stringify(responsibleEmails);
        delete payload['MEAL_PRICE_HISTORY_JSON'];
        adminState.loading = true;
        google.script.run.withSuccessHandler(res => {
@@ -1085,7 +1161,7 @@ createApp({
     };
 
     const addResponsible = () => {
-       adminState.responsiblesList.push({ name: '', email: '', type: 'CC' });
+       adminState.responsiblesList.push('');
     };
 
     const removeResponsible = (idx) => {
