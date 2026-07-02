@@ -8,6 +8,7 @@ Aplicacion web para gestionar pedidos de almuerzo institucional con Google Apps 
 - Roles de `USUARIO`, `ADMIN_DEP` y `ADMIN_GEN`.
 - Gestion de usuarios, departamentos, menu, dias libres y configuracion del sistema.
 - Recordatorios, cierre diario, respaldos en Drive y reportes por correo.
+- Avisos por correo cuando se carga menu nuevo, cuando un cambio de menu cancela pedidos afectados y cuando Calendario suspende un almuerzo.
 - Reporte diario consolidado con detalle por departamento y Excel general con hojas separadas.
 - Resumen del usuario con costo acumulado por almuerzos segun el precio vigente en cada fecha.
 
@@ -88,6 +89,9 @@ Detalles:
 - `Caldo` permite seleccionar mas de una opcion dentro de la misma categoria.
 - Los textos del menu se normalizan al guardar y al renderizar para evitar ALL CAPS.
 - Las validaciones criticas siguen ejecutandose en backend antes de guardar pedidos.
+- Al cargar menu por primera vez para una fecha futura, ya sea desde el modulo `Menu` o desde importar menu semanal, se envia un correo estilizado a los usuarios activos que mantienen las notificaciones activadas (`preferencias_json.reminders !== false`).
+- Si se edita, elimina o reemplaza una opcion/plato de una fecha futura y existen pedidos activos con esa opcion, solo esos pedidos se marcan como `CANCELADO` y sus usuarios reciben un correo personalizado para volver a pedir. Estos avisos se envian aunque el usuario tenga notificaciones desactivadas.
+- Si la administracion suspende el almuerzo marcando la fecha como dia libre en `Calendario`, la fecha deja de aparecer como disponible, se cancelan los pedidos activos de ese dia y se notifica a todos los usuarios afectados aunque tengan notificaciones desactivadas.
 
 ## Reportes de cierre y modo prueba
 
@@ -97,6 +101,7 @@ Detalles:
 - Formato manual esperado para `RESPONSIBLES_EMAILS_JSON`: `["proveedor@ejemplo.com","cocina@ejemplo.com"]`.
 - El resumen diario general mantiene el total de pedidos y el CTA al panel administrativo, agrega una tabla de pedidos por departamento y adjunta un Excel consolidado.
 - El Excel consolidado usa la plantilla de `DAILY_REPORT_MODEL_ID`: la primera hoja es `Resumen general` con todos los pedidos continuos, y las hojas siguientes separan los pedidos por departamento.
+- Los reportes diarios generados desde la plantilla incluyen una columna final `NOTA PARA LA COCINA`, tomada de la nota opcional del formulario de pedido.
 - La generacion del Excel consolidado reintenta accesos transitorios a la hoja temporal antes de fallar. Si hay pedidos y no se logra generar el XLSX esperado, el resumen administrativo no se envia sin adjunto.
 - Las hojas generadas escriben la tabla desde la columna `A`, no inmovilizan filas ni columnas, alinean `NOMBRE EMPLEADO` a la izquierda y calculan un alto minimo por fila para evitar truncar textos envueltos.
 - En Drive se siguen guardando los PDF por departamento y ahora tambien se guarda un PDF del `Resumen general`.

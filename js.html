@@ -961,11 +961,17 @@ createApp({
     const deleteMenuItem = (id) => {
        showModal("¿Eliminar plato?", "Confirmar", "CONFIRM", () => {
            adminState.loading = true;
-           google.script.run.withSuccessHandler(res => {
-              adminState.loading = false;
-              if(res.ok) loadMenuDay();
-              else showModal(res.msg, "Error");
-           }).apiDeleteMenuItem(id);
+           google.script.run
+             .withSuccessHandler(res => {
+                adminState.loading = false;
+                if(res.ok) loadMenuDay();
+                else showModal(res.msg, "Error");
+             })
+             .withFailureHandler(err => {
+                adminState.loading = false;
+                showModal(err.message || "Error eliminando el plato.", "Error");
+             })
+             .apiDeleteMenuItem(id);
        });
     };
 
@@ -1114,6 +1120,10 @@ createApp({
             } else {
                showModal(res.msg, "Error");
             }
+         })
+         .withFailureHandler(err => {
+            adminState.loading = false;
+            showModal(err.message || "Error importando el menÃº.", "Error");
          })
          .apiSaveWeeklyMenu(data);
     };

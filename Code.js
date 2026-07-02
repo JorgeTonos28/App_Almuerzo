@@ -1,7 +1,7 @@
 /**
  * Code.gs - Backend V5 (Refactor & New Features)
  */
-const APP_VERSION = 'v7.14';
+const APP_VERSION = 'v7.15';
 const SPREADSHEET_RETRY_ATTEMPTS = 4;
 const SPREADSHEET_RETRY_DELAY_MS = 1500;
 
@@ -1129,6 +1129,407 @@ function apiAdminCancelOrder(orderId) {
   return { ok: true };
 }
 
+function isFutureDateString_(dateStr) {
+  const d = new Date(String(dateStr || '') + 'T12:00:00');
+  if (isNaN(d.getTime())) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const target = new Date(d);
+  target.setHours(0, 0, 0, 0);
+  return target > today;
+}
+
+function safeParseJsonObject_(raw) {
+  if (!raw) return {};
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch(e) {
+    return {};
+  }
+}
+
+function getFirstName_(name) {
+  const first = String(name || '').trim().split(/\s+/)[0];
+  return first || 'Colaborador';
+}
+
+function getMenuSelectionKey_(cat, plato) {
+  return String(cat || '').trim() + '\u0001' + normalizeMenuText_(plato);
+}
+
+function getMenuItemSnapshotFromRow_(row) {
+  if (!row || !row[1]) return null;
+
+  let dateStr = '';
+  try {
+    dateStr = formatMenuRowDate_(row[1]);
+  } catch(e) {
+    return null;
+  }
+
+  const cat = String(row[2] || '').trim();
+  const plato = normalizeMenuText_(row[3]);
+  if (!dateStr || !cat || !plato) return null;
+
+  return {
+    id: row[0],
+    date: dateStr,
+    cat: cat,
+    plato: plato,
+    desc: normalizeMenuText_(row[4]),
+    enabled: String(row[5] || '').trim().toUpperCase() === 'SI',
+    key: getMenuSelectionKey_(cat, plato)
+  };
+}
+
+function createMenuDateSnapshot_() {
+  return { items: [], keys: {} };
+}
+
+function addMenuItemToSnapshot_(snapshot, item) {
+  if (!snapshot || !item || !item.enabled) return;
+  snapshot.items.push(item);
+  if (!snapshot.keys[item.key]) snapshot.keys[item.key] = [];
+  snapshot.keys[item.key].push(item);
+}
+
+function buildActiveMenuSnapshotByDate_(menuData, targetDates) {
+  const result = {};
+  const datesSet = targetDates ? new Set(Array.from(targetDates)) : null;
+
+  for (let i = 1; i < menuData.length; i++) {
+    const item = getMenuItemSnapshotFromRow_(menuData[i]);
+    if (!item || !item.enabled) continue;
+    if (datesSet && !datesSet.has(item.date)) continue;
+    if (!result[item.date]) result[item.date] = createMenuDateSnapshot_();
+    addMenuItemToSnapshot_(result[item.date], item);
+  }
+
+  return result;
+}
+
+function createMenuItemFromPayload_(dateStr, itemData) {
+  const cat = String(itemData && itemData.cat || '').trim();
+  const plato = normalizeMenuText_(itemData && itemData.plato);
+  if (!dateStr || !cat || !plato) return null;
+
+  return {
+    date: dateStr,
+    cat: cat,
+    plato: plato,
+    desc: normalizeMenuText_(itemData && itemData.desc),
+    enabled: true,
+    key: getMenuSelectionKey_(cat, plato)
+  };
+}
+
+function isMenuItemChanged_(oldItem, newItem) {
+  if (!oldItem || !newItem) return false;
+  return oldItem.date !== newItem.date ||
+    oldItem.cat !== newItem.cat ||
+    oldItem.plato !== newItem.plato ||
+    oldItem.desc !== newItem.desc;
+}
+
+function addAffectedMenuKey_(affectedKeyMap, item) {
+  if (!affectedKeyMap || !item || !item.key) return;
+  affectedKeyMap[item.key] = {
+    cat: item.cat,
+    plato: item.plato
+  };
+}
+
+function getAffectedMenuKeysByReplacement_(oldSnapshot, newSnapshot) {
+  const affectedKeyMap = {};
+  if (!oldSnapshot || !oldSnapshot.items || oldSnapshot.items.length === 0) return affectedKeyMap;
+
+  const nextSnapshot = newSnapshot || createMenuDateSnapshot_();
+  oldSnapshot.items.forEach(oldItem => {
+    const candidates = nextSnapshot.keys[oldItem.key] || [];
+    const unchanged = candidates.some(newItem => newItem.desc === oldItem.desc);
+    if (!unchanged) addAffectedMenuKey_(affectedKeyMap, oldItem);
+  });
+
+  return affectedKeyMap;
+}
+
+function hasAffectedMenuKeys_(affectedKeyMap) {
+  return affectedKeyMap && Object.keys(affectedKeyMap).length > 0;
+}
+
+function getOrderMenuKeyDetails_(detail) {
+  const normalized = normalizeOrderDetail_(detail || {});
+  const cats = Array.isArray(normalized.categorias) ? normalized.categorias : [];
+  const items = Array.isArray(normalized.items) ? normalized.items : [];
+  const result = [];
+  const total = Math.max(cats.length, items.length);
+
+  for (let i = 0; i < total; i++) {
+    const cat = String(cats[i] || '').trim();
+    const item = normalizeMenuText_(items[i]);
+    if (!cat || !item) continue;
+    result.push({
+      key: getMenuSelectionKey_(cat, item),
+      cat: cat,
+      plato: item
+    });
+  }
+
+  return result;
+}
+
+function uniqueStrings_(values) {
+  const seen = {};
+  const result = [];
+  (values || []).forEach(value => {
+    const normalized = String(value || '').trim();
+    if (normalized && !seen[normalized]) {
+      seen[normalized] = true;
+      result.push(normalized);
+    }
+  });
+  return result;
+}
+
+function getAffectedOrderItems_(detail, resumen, affectedKeyMap) {
+  if (!hasAffectedMenuKeys_(affectedKeyMap)) return [];
+  const matches = [];
+
+  getOrderMenuKeyDetails_(detail).forEach(item => {
+    if (affectedKeyMap[item.key]) matches.push(item.plato);
+  });
+
+  if (matches.length === 0 && resumen) {
+    const normalizedSummary = normalizeMenuText_(resumen);
+    Object.keys(affectedKeyMap).forEach(key => {
+      const affectedItem = affectedKeyMap[key];
+      if (affectedItem && affectedItem.plato && normalizedSummary.indexOf(affectedItem.plato) !== -1) {
+        matches.push(affectedItem.plato);
+      }
+    });
+  }
+
+  return uniqueStrings_(matches);
+}
+
+function cancelActiveOrdersForPlans_(plans) {
+  const validPlans = (plans || []).filter(plan => plan && plan.date && (plan.cancelAll || hasAffectedMenuKeys_(plan.affectedKeyMap)));
+  if (validPlans.length === 0) return [];
+
+  const planByDate = {};
+  validPlans.forEach(plan => {
+    planByDate[plan.date] = plan;
+  });
+
+  const sh = SpreadsheetApp.getActive().getSheetByName('Pedidos');
+  const data = readSheetValues_(sh, 11);
+  const affectedOrders = [];
+  const statusRanges = [];
+  const timestampRanges = [];
+  const now = new Date();
+
+  for (let i = 1; i < data.length; i++) {
+    let rowDate = '';
+    try {
+      rowDate = formatDate_(new Date(data[i][2]));
+    } catch(e) {
+      continue;
+    }
+
+    const plan = planByDate[rowDate];
+    if (!plan) continue;
+    if (String(data[i][8] || '').trim().toUpperCase() === 'CANCELADO') continue;
+
+    const detail = safeParseJsonObject_(data[i][7]);
+    const affectedItems = plan.cancelAll
+      ? []
+      : getAffectedOrderItems_(detail, data[i][6], plan.affectedKeyMap);
+    if (!plan.cancelAll && affectedItems.length === 0) continue;
+
+    const rowIdx = i + 1;
+    statusRanges.push(`I${rowIdx}`);
+    timestampRanges.push(`J${rowIdx}`);
+    affectedOrders.push({
+      rowIdx: rowIdx,
+      id: data[i][0],
+      date: rowDate,
+      email: String(data[i][3] || '').trim().toLowerCase(),
+      nombre: data[i][4],
+      departamentoId: data[i][5],
+      resumen: normalizeMenuText_(data[i][6]),
+      detail: normalizeOrderDetail_(detail),
+      affectedItems: affectedItems
+    });
+  }
+
+  if (affectedOrders.length > 0) {
+    sh.getRangeList(statusRanges).setValue('CANCELADO');
+    sh.getRangeList(timestampRanges).setValue(now);
+  }
+
+  return affectedOrders;
+}
+
+function groupAffectedOrdersByDate_(orders) {
+  const grouped = {};
+  (orders || []).forEach(order => {
+    if (!grouped[order.date]) grouped[order.date] = [];
+    grouped[order.date].push(order);
+  });
+  return grouped;
+}
+
+function buildMenuItemsHtml_(items) {
+  const grouped = {};
+  const order = ['Arroces', 'Granos', 'Carnes', 'Viveres', 'Ensaladas', 'Vegetariana', 'Caldo', 'Opcion_Rapida'];
+
+  (items || []).forEach(item => {
+    if (!item || !item.cat || !item.plato) return;
+    if (!grouped[item.cat]) grouped[item.cat] = [];
+    grouped[item.cat].push(item);
+  });
+
+  const categories = Object.keys(grouped).sort((a, b) => {
+    const aIdx = order.indexOf(a);
+    const bIdx = order.indexOf(b);
+    return (aIdx === -1 ? 999 : aIdx) - (bIdx === -1 ? 999 : bIdx) || a.localeCompare(b, 'es');
+  });
+
+  if (categories.length === 0) return '';
+
+  const body = categories.map(cat => {
+    const rows = grouped[cat].map(item => {
+      const desc = item.desc ? `<span style="display:block;color:#6b7280;font-size:12px;margin-top:2px;">${escapeHtml_(item.desc)}</span>` : '';
+      return `<li style="margin:6px 0;"><strong>${escapeHtml_(item.plato)}</strong>${desc}</li>`;
+    }).join('');
+    return `
+      <div style="margin: 16px 0;">
+        <p style="margin:0 0 6px;color:#1d4ed8;font-size:13px;font-weight:800;text-transform:uppercase;">${escapeHtml_(formatCatNameForEmail_(cat))}</p>
+        <ul style="margin:0;padding-left:20px;">${rows}</ul>
+      </div>
+    `;
+  }).join('');
+
+  return `<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin:18px 0;">${body}</div>`;
+}
+
+function formatCatNameForEmail_(cat) {
+  return String(cat || '').replace(/_/g, ' ');
+}
+
+function buildSimpleListHtml_(items) {
+  const values = uniqueStrings_(items);
+  if (values.length === 0) return '';
+  return `<ul style="margin:8px 0 0;padding-left:20px;">${values.map(item => `<li>${escapeHtml_(item)}</li>`).join('')}</ul>`;
+}
+
+function getActiveNotificationUsers_(usersData) {
+  const data = usersData || readSheetValues_(SpreadsheetApp.getActive().getSheetByName('Usuarios'), 7);
+  const users = [];
+
+  for (let i = 1; i < data.length; i++) {
+    const email = String(data[i][0] || '').trim().toLowerCase();
+    const estado = String(data[i][4] || '').trim().toUpperCase();
+    const prefs = safeParseJsonObject_(data[i][5]);
+    if (estado === 'ACTIVO' && email && prefs.reminders !== false) {
+      users.push({ email: email, nombre: data[i][1] });
+    }
+  }
+
+  return users;
+}
+
+function notifyUsersMenuAvailable_(dateStr, menuItems, usersData) {
+  if (!isFutureDateString_(dateStr)) return 0;
+
+  const recipients = getActiveNotificationUsers_(usersData);
+  if (recipients.length === 0) return 0;
+
+  const dateLabel = formatDisplayDate_(dateStr);
+  const menuHtml = buildMenuItemsHtml_(menuItems);
+  const appUrl = getAppUrl_();
+
+  recipients.forEach(user => {
+    const html = getEmailTemplate_({
+      title: 'Menu disponible',
+      subtitle: `Almuerzo para ${dateLabel}`,
+      body: `
+        <p>Hola <strong>${escapeHtml_(getFirstName_(user.nombre))}</strong>,</p>
+        <p>Ya esta disponible el menu de almuerzo preempacado para <strong>${escapeHtml_(dateLabel)}</strong>.</p>
+        ${menuHtml}
+        <p>Puedes entrar al sistema y realizar tu pedido mientras la fecha siga abierta.</p>
+      `,
+      cta: { text: 'Hacer pedido', url: appUrl },
+      footerNote: 'Recibes este correo porque tienes las notificaciones activas en la app.'
+    });
+
+    sendEmail_(user.email, `Almuerzo Pre-empacado | Menu disponible ${dateStr}`, html);
+  });
+
+  return recipients.length;
+}
+
+function notifyMenuChangedCancellations_(dateStr, orders) {
+  const dateLabel = formatDisplayDate_(dateStr);
+  const appUrl = getAppUrl_();
+  let sent = 0;
+
+  (orders || []).forEach(order => {
+    if (!order.email) return;
+    const affectedHtml = buildSimpleListHtml_(order.affectedItems);
+    const html = getEmailTemplate_({
+      title: 'Pedido cancelado',
+      subtitle: `Cambio de menu para ${dateLabel}`,
+      body: `
+        <p>Hola <strong>${escapeHtml_(getFirstName_(order.nombre))}</strong>,</p>
+        <p>Tu pedido para <strong>${escapeHtml_(dateLabel)}</strong> fue cancelado porque el menu de ese dia cambio.</p>
+        <p>Debes volver a entrar al sistema y realizar tu pedido con las opciones actualizadas.</p>
+        <div style="background:#fef2f2;border-left:4px solid #ef4444;padding:12px 14px;margin:16px 0;color:#991b1b;">
+          <strong>Pedido cancelado:</strong><br>${escapeHtml_(order.resumen || 'Sin resumen')}
+          ${affectedHtml ? `<div style="margin-top:10px;"><strong>Opciones afectadas:</strong>${affectedHtml}</div>` : ''}
+        </div>
+      `,
+      cta: { text: 'Volver a pedir', url: appUrl },
+      footerNote: 'Este aviso se envia aunque las notificaciones esten desactivadas porque afecta un pedido activo.'
+    });
+
+    sendEmail_(order.email, `Almuerzo Pre-empacado | Pedido cancelado por cambio de menu ${dateStr}`, html);
+    sent++;
+  });
+
+  return sent;
+}
+
+function notifyLunchSuspendedCancellations_(dateStr, orders, reason) {
+  const dateLabel = formatDisplayDate_(dateStr);
+  let sent = 0;
+
+  (orders || []).forEach(order => {
+    if (!order.email) return;
+    const reasonHtml = reason ? `<p><strong>Motivo registrado:</strong> ${escapeHtml_(reason)}</p>` : '';
+    const html = getEmailTemplate_({
+      title: 'Almuerzo suspendido',
+      subtitle: `Suspension para ${dateLabel}`,
+      body: `
+        <p>Hola <strong>${escapeHtml_(getFirstName_(order.nombre))}</strong>,</p>
+        <p>La administracion suspendio el almuerzo preempacado para <strong>${escapeHtml_(dateLabel)}</strong>.</p>
+        ${reasonHtml}
+        <div style="background:#fff7ed;border-left:4px solid #f97316;padding:12px 14px;margin:16px 0;color:#9a3412;">
+          Tu pedido de ese dia fue cancelado automaticamente.
+        </div>
+        <p>No necesitas realizar ninguna accion adicional para esa fecha.</p>
+      `,
+      footerNote: 'Este aviso se envia aunque las notificaciones esten desactivadas porque afecta un pedido activo.'
+    });
+
+    sendEmail_(order.email, `Almuerzo Pre-empacado | Almuerzo suspendido ${dateStr}`, html);
+    sent++;
+  });
+
+  return sent;
+}
+
 // === MENU MANAGEMENT API ===
 
 function apiGetMenuDay(dateStr) {
@@ -1170,24 +1571,53 @@ function apiSaveMenuItem(dateStr, cat, itemData) {
    const sh = SpreadsheetApp.getActive().getSheetByName('Menu');
    const data = sh.getDataRange().getValues();
    let rowIdx = -1;
+   let oldItem = null;
 
    if (itemData.id) {
       for(let i=1; i<data.length; i++) {
-         if (String(data[i][0]) === String(itemData.id)) { rowIdx = i+1; break; }
+         if (String(data[i][0]) === String(itemData.id)) {
+            rowIdx = i+1;
+            oldItem = getMenuItemSnapshotFromRow_(data[i]);
+            break;
+         }
       }
    }
 
+   const normalizedDate = formatDate_(new Date(dateStr + 'T12:00:00'));
+   const menuSnapshot = buildActiveMenuSnapshotByDate_(data, new Set([normalizedDate]));
+   const hadActiveMenuBefore = !!(menuSnapshot[normalizedDate] && menuSnapshot[normalizedDate].items.length > 0);
    const id = rowIdx > 0 ? itemData.id : Utilities.getUuid();
    // Save as Date object (local)
-   const dateObj = new Date(dateStr + 'T12:00:00');
+   const dateObj = new Date(normalizedDate + 'T12:00:00');
    const row = [id, dateObj, cat, normalizeMenuText_(itemData.plato), normalizeMenuText_(itemData.desc), 'SI'];
+   const newItem = createMenuItemFromPayload_(normalizedDate, { cat: cat, plato: itemData.plato, desc: itemData.desc });
 
    if (rowIdx > 0) sh.getRange(rowIdx, 1, 1, row.length).setValues([row]);
    else sh.appendRow(row);
 
+   let cancellationCount = 0;
+   let cancellationEmails = 0;
+   if (oldItem && oldItem.enabled && isMenuItemChanged_(oldItem, newItem) && isFutureDateString_(oldItem.date)) {
+      const affectedKeyMap = {};
+      addAffectedMenuKey_(affectedKeyMap, oldItem);
+      const affectedOrders = cancelActiveOrdersForPlans_([{ date: oldItem.date, affectedKeyMap: affectedKeyMap }]);
+      cancellationCount = affectedOrders.length;
+      cancellationEmails = notifyMenuChangedCancellations_(oldItem.date, affectedOrders);
+   }
+
+   let menuNotificationCount = 0;
+   if (!oldItem && !hadActiveMenuBefore && newItem && isFutureDateString_(normalizedDate)) {
+      menuNotificationCount = notifyUsersMenuAvailable_(normalizedDate, [newItem]);
+   }
+
    invalidateMenuDataCache_();
    invalidateUserInitCache_();
-   return { ok: true };
+   return {
+      ok: true,
+      cancellations: cancellationCount,
+      cancellationEmails: cancellationEmails,
+      menuNotificationEmails: menuNotificationCount
+   };
 }
 
 function apiDeleteMenuItem(id) {
@@ -1197,10 +1627,26 @@ function apiDeleteMenuItem(id) {
    const data = sh.getDataRange().getValues();
    for(let i=1; i<data.length; i++) {
       if (String(data[i][0]) === String(id)) {
+         const oldItem = getMenuItemSnapshotFromRow_(data[i]);
+         if (oldItem && !isDateOpenForOrdering_(oldItem.date)) {
+            throw new Error("No puedes eliminar platos de una fecha no hÃ¡bil, pasada o cerrada.");
+         }
          sh.deleteRow(i+1);
+         let affectedOrders = [];
+         let cancellationEmails = 0;
+         if (oldItem && oldItem.enabled && isFutureDateString_(oldItem.date)) {
+            const affectedKeyMap = {};
+            addAffectedMenuKey_(affectedKeyMap, oldItem);
+            affectedOrders = cancelActiveOrdersForPlans_([{ date: oldItem.date, affectedKeyMap: affectedKeyMap }]);
+            cancellationEmails = notifyMenuChangedCancellations_(oldItem.date, affectedOrders);
+         }
          invalidateMenuDataCache_();
          invalidateUserInitCache_();
-         return { ok: true };
+         return {
+            ok: true,
+            cancellations: affectedOrders.length,
+            cancellationEmails: cancellationEmails
+         };
       }
    }
    return { ok: false, msg: "No encontrado" };
@@ -1216,7 +1662,15 @@ function apiSaveWeeklyMenu(menuData) {
 
    // Normalize keys to ensure matching
    const datesToUpdate = new Set();
-   Object.keys(menuData).forEach(k => datesToUpdate.add(formatDate_(new Date(k + 'T12:00:00'))));
+   Object.keys(menuData).forEach(k => {
+      const normalizedDate = formatDate_(new Date(k + 'T12:00:00'));
+      if (!isDateOpenForOrdering_(normalizedDate)) {
+         throw new Error("No puedes importar menÃº para fechas no hÃ¡biles, pasadas o cerradas.");
+      }
+      datesToUpdate.add(normalizedDate);
+   });
+
+   const oldMenuByDate = buildActiveMenuSnapshotByDate_(data, datesToUpdate);
 
    // 1. Identify rows to delete (indices, descending)
    const rowsToDelete = [];
@@ -1234,6 +1688,7 @@ function apiSaveWeeklyMenu(menuData) {
 
    // 3. Prepare new rows
    const allNewRows = [];
+   const newMenuByDate = {};
    // Iterate over the keys provided by client to maintain association
    Object.keys(menuData).forEach(dateKey => {
       const normalizedDate = formatDate_(new Date(dateKey + 'T12:00:00'));
@@ -1242,12 +1697,16 @@ function apiSaveWeeklyMenu(menuData) {
          const items = menuData[dateKey] || [];
          const dateObj = new Date(normalizedDate + 'T12:00:00');
          items.forEach(item => {
+            const newItem = createMenuItemFromPayload_(normalizedDate, item);
+            if (!newItem) return;
+            if (!newMenuByDate[normalizedDate]) newMenuByDate[normalizedDate] = createMenuDateSnapshot_();
+            addMenuItemToSnapshot_(newMenuByDate[normalizedDate], newItem);
             allNewRows.push([
               Utilities.getUuid(),
               dateObj,
-              item.cat,
-              normalizeMenuText_(item.plato),
-              normalizeMenuText_(item.desc || ''),
+              newItem.cat,
+              newItem.plato,
+              newItem.desc,
               'SI'
             ]);
          });
@@ -1259,9 +1718,41 @@ function apiSaveWeeklyMenu(menuData) {
       sh.getRange(sh.getLastRow() + 1, 1, allNewRows.length, allNewRows[0].length).setValues(allNewRows);
    }
 
+   const menuChangePlans = [];
+   let newMenuNotificationEmails = 0;
+   let notificationUsersData = null;
+
+   datesToUpdate.forEach(dateStr => {
+      const oldSnapshot = oldMenuByDate[dateStr] || createMenuDateSnapshot_();
+      const newSnapshot = newMenuByDate[dateStr] || createMenuDateSnapshot_();
+
+      if (oldSnapshot.items.length === 0 && newSnapshot.items.length > 0 && isFutureDateString_(dateStr)) {
+         if (!notificationUsersData) notificationUsersData = readSheetValues_(ss.getSheetByName('Usuarios'), 7);
+         newMenuNotificationEmails += notifyUsersMenuAvailable_(dateStr, newSnapshot.items, notificationUsersData);
+         return;
+      }
+
+      const affectedKeyMap = getAffectedMenuKeysByReplacement_(oldSnapshot, newSnapshot);
+      if (hasAffectedMenuKeys_(affectedKeyMap) && isFutureDateString_(dateStr)) {
+         menuChangePlans.push({ date: dateStr, affectedKeyMap: affectedKeyMap });
+      }
+   });
+
+   const affectedOrders = cancelActiveOrdersForPlans_(menuChangePlans);
+   const affectedByDate = groupAffectedOrdersByDate_(affectedOrders);
+   let cancellationEmails = 0;
+   Object.keys(affectedByDate).forEach(dateStr => {
+      cancellationEmails += notifyMenuChangedCancellations_(dateStr, affectedByDate[dateStr]);
+   });
+
    invalidateMenuDataCache_();
    invalidateUserInitCache_();
-   return { ok: true };
+   return {
+      ok: true,
+      cancellations: affectedOrders.length,
+      cancellationEmails: cancellationEmails,
+      menuNotificationEmails: newMenuNotificationEmails
+   };
 }
 
 // === HOLIDAYS API ===
@@ -1282,18 +1773,29 @@ function apiSaveHoliday(dateStr, desc) {
 
    const sh = SpreadsheetApp.getActive().getSheetByName('DiasLibres');
    const data = sh.getDataRange().getValues();
+   let rowIdx = -1;
+
    // Check duplicate
    for(let i=1; i<data.length; i++) {
       if (formatDate_(new Date(data[i][0])) === dateStr) {
-         sh.getRange(i+1, 2).setValue(desc);
-         return { ok: true };
+         rowIdx = i + 1;
+         break;
       }
    }
-   sh.appendRow([dateStr, desc]);
+
+   if (rowIdx > 0) sh.getRange(rowIdx, 2).setValue(desc);
+   else sh.appendRow([dateStr, desc]);
+
    CacheService.getScriptCache().remove('HOLIDAYS_CACHE_V2');
+   const suspendedOrders = cancelActiveOrdersForPlans_([{ date: dateStr, cancelAll: true }]);
+   const suspensionEmails = notifyLunchSuspendedCancellations_(dateStr, suspendedOrders, desc);
    invalidateMenuDataCache_();
    invalidateUserInitCache_();
-   return { ok: true };
+   return {
+      ok: true,
+      cancellations: suspendedOrders.length,
+      cancellationEmails: suspensionEmails
+   };
 }
 
 function apiDeleteHoliday(dateStr) {
@@ -1797,6 +2299,11 @@ function normalizeOrderDetail_(detail) {
     normalized.items = normalized.items.map(normalizeMenuText_);
   }
   return normalized;
+}
+
+function getOrderKitchenNote_(detail) {
+  if (!detail || typeof detail !== 'object') return '';
+  return String(detail.comentarios || '').trim();
 }
 
 function getHolidaysList_() {
@@ -2444,6 +2951,7 @@ function getOrdersByDateDetailed_(dateStr, context) {
         departamento: deptMap[data[i][5]] || data[i][5],
         resumen: data[i][6],
         detail: detail,
+        notaCocina: getOrderKitchenNote_(detail),
         codigo: codeMap[email] || ''
       });
     }
@@ -2898,25 +3406,25 @@ function fillReportSheet_(sh, deptName, dateStr, orders, options) {
   sh.setFrozenRows(0);
   sh.setFrozenColumns(0);
 
-  // 1. Set Dept Name (A3:L4)
-  sh.getRange("A3:L4").merge().setValue(title)
+  // 1. Set Dept Name (A3:M4)
+  sh.getRange("A3:M4").merge().setValue(title)
     .setHorizontalAlignment("center").setVerticalAlignment("middle");
 
-  // 2. Set Date (A5:L5) -> "PEDIDO ALMUERZO : 03/12/2025"
+  // 2. Set Date (A5:M5) -> "PEDIDO ALMUERZO : 03/12/2025"
   const d = new Date(dateStr + 'T12:00:00');
   const fmtDate = Utilities.formatDate(d, Session.getScriptTimeZone(), 'dd/MM/yyyy');
-  sh.getRange("A5:L5").merge().setValue(`PEDIDO ALMUERZO : ${fmtDate}`)
+  sh.getRange("A5:M5").merge().setValue(`PEDIDO ALMUERZO : ${fmtDate}`)
     .setHorizontalAlignment("center").setVerticalAlignment("middle")
     .setFontWeight("bold");
 
-  // 3. Set Headers (A7:L7)
-  const headers = ['NO.', 'NOMBRE EMPLEADO', 'C\u00d3DIGO', 'DEPARTAMENTO', 'ARROCES', 'GRANOS', 'CARNES', 'VIVERES', 'ESPECIALIDADES', 'ENSALADAS', 'CALDO', 'OPCION RAPIDA'];
-  sh.getRange("A7:L7").setValues([headers])
+  // 3. Set Headers (A7:M7)
+  const headers = ['NO.', 'NOMBRE EMPLEADO', 'C\u00d3DIGO', 'DEPARTAMENTO', 'ARROCES', 'GRANOS', 'CARNES', 'VIVERES', 'ESPECIALIDADES', 'ENSALADAS', 'CALDO', 'OPCION RAPIDA', 'NOTA PARA LA COCINA'];
+  sh.getRange("A7:M7").setValues([headers])
     .setFontWeight("bold").setBorder(true, true, true, true, true, true);
 
   // 4. Populate Data
   // Mapping categories to columns indices (relative to A, so 0-based index in values array)
-  // Headers: No(0), Nombre(1), Cod(2), Dept(3), Arroz(4), Granos(5), Carnes(6), Viveres(7), Esp(8), Ens(9), Caldo(10), OpRap(11)
+  // Headers: No(0), Nombre(1), Cod(2), Dept(3), Arroz(4), Granos(5), Carnes(6), Viveres(7), Esp(8), Ens(9), Caldo(10), OpRap(11), Nota(12)
 
   const catMap = {
      'Arroces': 4,
@@ -2931,11 +3439,12 @@ function fillReportSheet_(sh, deptName, dateStr, orders, options) {
 
   const rows = [];
   orders.forEach((o, i) => {
-     const row = new Array(12).fill('');
+     const row = new Array(13).fill('');
      row[0] = i + 1;
      row[1] = o.nombre;
      row[2] = o.codigo || '';
      row[3] = o.departamento;
+     row[12] = o.notaCocina || getOrderKitchenNote_(o.detail);
 
      const d = o.detail;
      if (d && d.categorias && d.items) {
@@ -2951,7 +3460,7 @@ function fillReportSheet_(sh, deptName, dateStr, orders, options) {
   });
 
   if (rows.length > 0) {
-     const range = sh.getRange(8, 1, rows.length, 12); // Start A8
+     const range = sh.getRange(8, 1, rows.length, 13); // Start A8
      range.setValues(rows);
      range.setBorder(true, true, true, true, true, true);
      range.setHorizontalAlignment("center");
@@ -2964,7 +3473,7 @@ function fillReportSheet_(sh, deptName, dateStr, orders, options) {
 }
 
 function applyReportSheetSizing_(sh, rows) {
-  const widths = [42, 185, 78, 170, 120, 120, 145, 125, 155, 165, 145, 150];
+  const widths = [42, 185, 78, 170, 120, 120, 145, 125, 155, 165, 145, 150, 220];
   widths.forEach((width, idx) => sh.setColumnWidth(idx + 1, width));
   sh.setRowHeight(7, 26);
 
