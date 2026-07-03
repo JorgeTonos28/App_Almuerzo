@@ -1,7 +1,7 @@
 /**
  * Code.gs - Backend V5 (Refactor & New Features)
  */
-const APP_VERSION = 'v7.15';
+const APP_VERSION = 'v7.16';
 const SPREADSHEET_RETRY_ATTEMPTS = 4;
 const SPREADSHEET_RETRY_DELAY_MS = 1500;
 
@@ -1470,6 +1470,54 @@ function notifyUsersMenuAvailable_(dateStr, menuItems, usersData) {
   return recipients.length;
 }
 
+function notifyUsersBulkMenuAvailable_(menuDays, usersData) {
+  const days = (menuDays || [])
+    .filter(day => day && day.date && isFutureDateString_(day.date) && day.items && day.items.length > 0)
+    .slice()
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+
+  if (days.length === 0) return 0;
+
+  const recipients = getActiveNotificationUsers_(usersData);
+  if (recipients.length === 0) return 0;
+
+  const firstDate = days[0].date;
+  const lastDate = days[days.length - 1].date;
+  const dateRangeLabel = days.length === 1
+    ? formatDisplayDate_(firstDate)
+    : `${formatDisplayDate_(firstDate)} - ${formatDisplayDate_(lastDate)}`;
+  const appUrl = getAppUrl_();
+  const daysHtml = days.map(day => `
+    <div style="border:1px solid #dbeafe;border-radius:14px;overflow:hidden;margin:18px 0;background:#ffffff;">
+      <div style="background:#eff6ff;padding:12px 16px;border-bottom:1px solid #dbeafe;">
+        <p style="margin:0;color:#1e3a8a;font-size:15px;font-weight:800;">${escapeHtml_(formatDisplayDate_(day.date))}</p>
+      </div>
+      <div style="padding:0 14px 2px;">
+        ${buildMenuItemsHtml_(day.items)}
+      </div>
+    </div>
+  `).join('');
+
+  recipients.forEach(user => {
+    const html = getEmailTemplate_({
+      title: 'Menu semanal disponible',
+      subtitle: `Menus cargados: ${dateRangeLabel}`,
+      body: `
+        <p>Hola <strong>${escapeHtml_(getFirstName_(user.nombre))}</strong>,</p>
+        <p>Ya estan disponibles los menus de almuerzo preempacado cargados para esta semana.</p>
+        ${daysHtml}
+        <p>Puedes entrar al sistema y realizar tus pedidos mientras las fechas sigan abiertas.</p>
+      `,
+      cta: { text: 'Planificar pedidos', url: appUrl },
+      footerNote: 'Recibes este correo porque tienes las notificaciones activas en la app.'
+    });
+
+    sendEmail_(user.email, `Almuerzo Pre-empacado | Menu semanal disponible ${firstDate}`, html);
+  });
+
+  return recipients.length;
+}
+
 function notifyMenuChangedCancellations_(dateStr, orders) {
   const dateLabel = formatDisplayDate_(dateStr);
   const appUrl = getAppUrl_();
@@ -1719,16 +1767,15 @@ function apiSaveWeeklyMenu(menuData) {
    }
 
    const menuChangePlans = [];
+   const newMenuDaysForBulkEmail = [];
    let newMenuNotificationEmails = 0;
-   let notificationUsersData = null;
 
    datesToUpdate.forEach(dateStr => {
       const oldSnapshot = oldMenuByDate[dateStr] || createMenuDateSnapshot_();
       const newSnapshot = newMenuByDate[dateStr] || createMenuDateSnapshot_();
 
       if (oldSnapshot.items.length === 0 && newSnapshot.items.length > 0 && isFutureDateString_(dateStr)) {
-         if (!notificationUsersData) notificationUsersData = readSheetValues_(ss.getSheetByName('Usuarios'), 7);
-         newMenuNotificationEmails += notifyUsersMenuAvailable_(dateStr, newSnapshot.items, notificationUsersData);
+         newMenuDaysForBulkEmail.push({ date: dateStr, items: newSnapshot.items });
          return;
       }
 
@@ -1737,6 +1784,11 @@ function apiSaveWeeklyMenu(menuData) {
          menuChangePlans.push({ date: dateStr, affectedKeyMap: affectedKeyMap });
       }
    });
+
+   if (newMenuDaysForBulkEmail.length > 0) {
+      const notificationUsersData = readSheetValues_(ss.getSheetByName('Usuarios'), 7);
+      newMenuNotificationEmails = notifyUsersBulkMenuAvailable_(newMenuDaysForBulkEmail, notificationUsersData);
+   }
 
    const affectedOrders = cancelActiveOrdersForPlans_(menuChangePlans);
    const affectedByDate = groupAffectedOrdersByDate_(affectedOrders);
