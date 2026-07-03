@@ -89,7 +89,8 @@ Detalles:
 - `Caldo` permite seleccionar mas de una opcion dentro de la misma categoria.
 - Los textos del menu se normalizan al guardar y al renderizar para evitar ALL CAPS.
 - Las validaciones criticas siguen ejecutandose en backend antes de guardar pedidos.
-- Al cargar menu por primera vez para una fecha futura, ya sea desde el modulo `Menu` o desde importar menu semanal, se envia un correo estilizado a los usuarios activos que mantienen las notificaciones activadas (`preferencias_json.reminders !== false`).
+- Al cargar menu por primera vez para una fecha futura desde el modulo `Menu`, se envia un correo estilizado a los usuarios activos que mantienen las notificaciones activadas (`preferencias_json.reminders !== false`).
+- Al importar menu semanal en bulk, los dias futuros que no tenian menu previo se agrupan en un solo correo por usuario con el detalle de todos los dias cargados.
 - Si se edita, elimina o reemplaza una opcion/plato de una fecha futura y existen pedidos activos con esa opcion, solo esos pedidos se marcan como `CANCELADO` y sus usuarios reciben un correo personalizado para volver a pedir. Estos avisos se envian aunque el usuario tenga notificaciones desactivadas.
 - Si la administracion suspende el almuerzo marcando la fecha como dia libre en `Calendario`, la fecha deja de aparecer como disponible, se cancelan los pedidos activos de ese dia y se notifica a todos los usuarios afectados aunque tengan notificaciones desactivadas.
 
