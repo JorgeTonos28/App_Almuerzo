@@ -1,3 +1,16 @@
+const USER_GAME_HEADERS = [
+  'juego_mes',
+  'juego_puntos_mes',
+  'juego_aciertos_mes',
+  'juego_fallos_mes',
+  'juego_tiempo_fecha',
+  'juego_segundos_hoy',
+  'juego_racha',
+  'juego_racha_max',
+  'juego_penalizacion_segundos',
+  'juego_actualizado'
+];
+
 /**
  * Setup.gs
  * Configura la base de datos (hojas y encabezados) y la configuración inicial.
@@ -10,7 +23,7 @@ function setupSheetsAndConfig(){
     },
     {
       name: 'Usuarios', 
-      headers: ['email', 'nombre', 'departamento', 'rol', 'estado', 'preferencias_json', 'codigo']
+      headers: ['email', 'nombre', 'departamento', 'rol', 'estado', 'preferencias_json', 'codigo'].concat(USER_GAME_HEADERS)
       // Roles: USUARIO, ADMIN_DEP, ADMIN_GEN
     },
     {
@@ -50,9 +63,9 @@ function setupSheetsAndConfig(){
       sh.getRange(1, 1, 1, s.headers.length).setFontWeight('bold').setBackground('#f3f4f6');
       sh.setFrozenRows(1);
     } else {
-      // Validación básica de encabezados existentes
-      const current = sh.getRange(1, 1, 1, s.headers.length).getValues()[0];
-      if (current.join() !== s.headers.join()) {
+      // Validacion y migracion segura de encabezados existentes.
+      const schema = ensureSheetHeaders_(sh, s.headers);
+      if (!schema.prefixOk) {
         Logger.log('Aviso: Los encabezados de ' + s.name + ' pueden diferir.');
       }
     }
@@ -66,6 +79,25 @@ function setupSheetsAndConfig(){
   SpreadsheetApp.flush();
   Logger.log('Estructura de base de datos actualizada correctamente.');
   return 'OK';
+}
+
+function ensureSheetHeaders_(sheet, expectedHeaders) {
+  const lastColumn = Math.max(sheet.getLastColumn(), 1);
+  const current = sheet.getRange(1, 1, 1, lastColumn).getValues()[0].map(String);
+  const existing = {};
+  current.forEach(header => {
+    if (header) existing[header] = true;
+  });
+
+  const missing = expectedHeaders.filter(header => !existing[header]);
+  if (missing.length > 0) {
+    sheet.getRange(1, lastColumn + 1, 1, missing.length).setValues([missing]);
+    sheet.getRange(1, lastColumn + 1, 1, missing.length).setFontWeight('bold').setBackground('#f3f4f6');
+  }
+
+  const compareLength = Math.min(current.length, expectedHeaders.length);
+  const prefixOk = current.slice(0, compareLength).join() === expectedHeaders.slice(0, compareLength).join();
+  return { prefixOk: prefixOk, missingCount: missing.length };
 }
 
 function ensureMenuDayEndpointToken_(configSheet) {

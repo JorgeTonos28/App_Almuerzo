@@ -11,6 +11,7 @@ Aplicacion web para gestionar pedidos de almuerzo institucional con Google Apps 
 - Avisos por correo cuando se carga menu nuevo, cuando un cambio de menu cancela pedidos afectados y cuando Calendario suspende un almuerzo.
 - Reporte diario consolidado con detalle por departamento y Excel general con hojas separadas.
 - Resumen del usuario con costo acumulado por almuerzos segun el precio vigente en cada fecha.
+- Mini juego posterior a la confirmacion del pedido, con puntaje mensual, limite diario de juego y ranking.
 
 ## Estructura base
 
@@ -23,12 +24,16 @@ La solucion usa estas hojas en la spreadsheet:
 - `Pedidos`
 - `DiasLibres`
 
+La hoja `Usuarios` conserva sus primeras columnas historicas (`email`, `nombre`, `departamento`, `rol`, `estado`, `preferencias_json`, `codigo`) y agrega al final las columnas del mini juego: `juego_mes`, `juego_puntos_mes`, `juego_aciertos_mes`, `juego_fallos_mes`, `juego_tiempo_fecha`, `juego_segundos_hoy`, `juego_racha`, `juego_racha_max`, `juego_penalizacion_segundos` y `juego_actualizado`.
+
 ## Setup inicial
 
 1. Abre el editor de Apps Script.
 2. Ejecuta `setupSheetsAndConfig()` desde `Setup.js`.
 3. Verifica que se hayan creado las hojas requeridas.
 4. Revisa `Config` y completa los valores operativos necesarios.
+
+Si ya existe la hoja `Usuarios`, `setupSheetsAndConfig()` agrega solo las columnas faltantes del mini juego al final de la hoja y conserva los datos existentes.
 
 ## Configuracion relevante
 
@@ -67,6 +72,26 @@ Notas sobre hints:
 - Los contadores de dismiss viven en `Usuarios.preferencias_json`, no en la hoja `Config`.
 - Los hints visibles se renderizan dentro de su propia seccion para que desaparezcan naturalmente al hacer scroll o cambiar de modulo.
 - El hint de costo acumulado queda anclado al card de costo dentro del resumen semanal/diario.
+
+## Mini juego y ranking
+
+- Al confirmar un pedido, el card de confirmacion entra con transicion y el usuario decide cuando iniciar o pausar el mini juego desde el control del recibo.
+- Si no hay menu cargado, la app muestra un card de estado similar al recibo y tambien permite jugar Mini chef desde ahi.
+- El usuario suma 1 punto al tocar al chef y pierde puntos si deja escapar al chef, toca una cebolla podrida o toca un sarten quemado.
+- Si el chef se escapa, o si el usuario toca una trampa, se incrementa una penalizacion en segundos antes de la proxima aparicion. La UI muestra ese contador en una sola capsula.
+- Mientras corre esa espera de penalizacion, no se puede pausar el juego, cambiar de fecha ni abrir el ranking para saltarse el contador.
+- Si una cebolla podrida o un sarten quemado desaparece sin que el usuario lo toque, no hay penalizacion ni perdida de puntos.
+- Las rachas otorgan combos pequenos para 3 chefs seguidos, 5 chefs seguidos y rachas perfectas cada 10 aciertos seguidos.
+- Cada 8 chefs seguidos se prepara un chef bonus: el proximo chef aparece con brillo durante 3 segundos y cada toque suma 1 punto sin cortar el round.
+- De forma muy poco frecuente puede salir un bizcocho disparado desde detras del card; si el usuario logra tocarlo antes de que se escape, suma 20 puntos.
+- Cada usuario tiene 900 segundos (15 minutos) de juego por dia. El contador corre solo mientras el juego esta en play, se guarda en `Usuarios.juego_segundos_hoy` y se reinicia automaticamente al cambiar `juego_tiempo_fecha`.
+- La economia de puntos esta calibrada para que los puntajes altos dependan de precision sostenida: los premios son pequenos, el bizcocho es raro y las penalizaciones pesan mas que un acierto normal.
+- El puntaje mensual se guarda en `Usuarios.juego_puntos_mes` y se considera solo si `juego_mes` coincide con el mes actual (`YYYY-MM`). Al iniciar un mes nuevo, el ranking muestra puntaje 0 hasta que el usuario vuelva a jugar.
+- Las jugadas se calculan en cliente durante la sesion para evitar latencia. El usuario puede guardar puntos manualmente y la app tambien sincroniza al agotarse el tiempo diario.
+- El puntaje aparece en el header junto al nombre del usuario. Al hacer clic se abre una pantalla de ranking mensual con los usuarios activos.
+- Cuando se agota el tiempo diario, la tarjeta del mini juego muestra un acceso directo al ranking mensual para que el usuario pueda revisar su posicion sin volver a buscar el boton del header.
+- La pantalla de ranking mensual incluye un boton para desplegar las reglas del juego con un resumen visual de puntaje, trampas, limite diario y guardado.
+- No requiere servicios avanzados ni scopes OAuth nuevos.
 
 ## Endpoint JSON de menu por fecha
 
@@ -113,6 +138,7 @@ Detalles:
 - La app embebe el bootstrap inicial (`apiGetInitData`) directamente desde `doGet()`, evitando una llamada extra `google.script.run` al abrir la app por primera vez.
 - Ese bootstrap precarga en una sola respuesta todos los menus abiertos del modulo principal, para que luego el cambio entre dias ocurra sin esperas ni recargas adicionales.
 - Al confirmar o cancelar, la UI actualiza el estado local del pedido y solo refresca lo estrictamente necesario.
+- El mini juego acumula puntaje y tiempo en cliente durante la sesion y sincroniza en lote las columnas de juego del usuario, sin disparar un re-bootstrap global.
 - La navegacion entre fechas reutiliza `allMenus` y `allOrders` ya cargados; el endpoint puntual por fecha queda como soporte y no como camino normal de navegacion.
 - El bootstrap inicial y el panel administrativo usan cache corta en servidor con invalidacion por revision para reducir latencia repetida.
 - El calculo de fechas abiertas y menus disponibles usa cache corta independiente para no reconstruir el bundle completo en cada request.

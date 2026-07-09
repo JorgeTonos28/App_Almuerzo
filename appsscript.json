@@ -1,20 +1,25 @@
 {
   "timeZone": "America/Santo_Domingo",
+  "exceptionLogging": "STACKDRIVER",
+  "runtimeVersion": "V8",
   "dependencies": {
     "enabledAdvancedServices": [
       {
         "userSymbol": "Drive",
-        "version": "v3",
-        "serviceId": "drive"
+        "serviceId": "drive",
+        "version": "v3"
       },
       {
         "userSymbol": "Calendar",
-        "version": "v3",
-        "serviceId": "calendar"
+        "serviceId": "calendar",
+        "version": "v3"
       }
     ]
   },
-  "exceptionLogging": "STACKDRIVER",
+  "webapp": {
+    "executeAs": "USER_DEPLOYING",
+    "access": "DOMAIN"
+  },
   "oauthScopes": [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
@@ -23,10 +28,5 @@
     "https://www.googleapis.com/auth/script.external_request",
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/script.scriptapp"
-  ],
-  "runtimeVersion": "V8",
-  "webapp": {
-    "executeAs": "USER_DEPLOYING",
-    "access": "DOMAIN"
-  }
+  ]
 }

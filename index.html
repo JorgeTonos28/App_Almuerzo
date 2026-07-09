@@ -73,6 +73,12 @@
            </button>
 
            <div class="flex items-center gap-3 pl-4 border-l border-gray-200">
+              <button @click="openChefRanking"
+                class="chef-score-pill"
+                title="Ver ranking mensual">
+                <i class="fa-solid fa-trophy"></i>
+                <span>{{ chefScore }}</span>
+              </button>
               <div class="text-right hidden sm:block leading-tight">
                 <div class="text-sm font-bold text-gray-900 truncate max-w-[120px]">{{ user.nombre }}</div>
                 <div class="text-[10px] text-gray-500 font-medium uppercase tracking-wide">{{ user.departamento }}</div>
@@ -94,7 +100,7 @@
       <p class="mt-4 text-sm text-gray-500 font-medium animate-pulse">Preparando menú...</p>
     </div>
 
-    <main :class="['flex-grow mx-auto w-full p-4 md:p-6 transition-all duration-300', viewMode === 'ADMIN' ? 'max-w-7xl' : 'max-w-4xl space-y-8']">
+    <main :class="['flex-grow mx-auto w-full p-4 md:p-6 transition-all duration-300', viewMode === 'ADMIN' ? 'max-w-7xl' : (viewMode === 'RANKING' ? 'max-w-6xl space-y-8' : 'max-w-4xl space-y-8')]">
       
       <!-- USER VIEW -->
       <div v-show="viewMode === 'USER'" class="space-y-8">
@@ -219,10 +225,12 @@
             <div id="date-scroll" class="border-b border-gray-100 flex gap-8 overflow-x-auto no-scrollbar scroll-smooth px-8">
                 <button v-for="d in dates" :key="d.value"
                   @click="changeDate(d.value)"
+                  :disabled="chefGameInCooldown"
                   :class="['pb-3 px-1 text-sm font-bold whitespace-nowrap transition-all border-b-2 outline-none shrink-0',
                     currentDate === d.value
                     ? 'border-blue-600 text-blue-600'
-                    : 'border-transparent text-gray-400 hover:text-gray-600 hover:border-gray-200']">
+                    : 'border-transparent text-gray-400 hover:text-gray-600 hover:border-gray-200',
+                    chefGameInCooldown ? 'opacity-50 cursor-not-allowed' : '']">
                   {{ d.label }}
                 </button>
             </div>
@@ -233,29 +241,88 @@
         </div>
       </div>
       
-      <div v-else-if="!loading && !myOrder" class="py-12 flex flex-col items-center justify-center text-center space-y-4 animate-fade-in">
-        <div class="bg-gray-100 p-6 rounded-full">
-            <i class="fa-solid fa-calendar-xmark text-4xl text-gray-400"></i>
+      <!-- Order Confirmed / No Menu State (Receipt Style) -->
+      <div v-if="chefGameCardVisible" class="chef-game-stage mt-8">
+        <div class="chef-game-status">
+          <div>
+            <span class="chef-game-status-label">Mini chef</span>
+            <strong>{{ chefRemainingLabel }}</strong>
+          </div>
+          <div class="chef-game-progress" aria-hidden="true">
+            <span :style="{ width: chefDailyProgress + '%' }"></span>
+          </div>
+          <div class="chef-game-actions">
+            <span class="chef-game-streak">Racha {{ chefGameState.streak || 0 }}</span>
+            <button
+              @click="toggleChefGamePlay"
+              class="chef-game-control"
+              :title="chefGameInCooldown ? 'Espera a que vuelva el chef' : (chefGame.active ? 'Pausar juego' : 'Iniciar juego')"
+              :disabled="!chefGameAvailable || chefGameInCooldown">
+              <i :class="chefGame.active ? 'fa-solid fa-pause' : 'fa-solid fa-play'"></i>
+            </button>
+            <button @click="syncChefGame(false)" :class="['chef-game-control', chefGame.dirty ? 'is-dirty' : '']" title="Guardar puntos" :disabled="chefGame.syncing || !chefGame.dirty">
+              <i :class="chefGame.syncing ? 'fa-solid fa-circle-notch fa-spin' : 'fa-solid fa-cloud-arrow-up'"></i>
+            </button>
+            <button v-if="!chefGameAvailable" @click="openChefRanking" class="chef-game-ranking-link" title="Ver ranking mensual">
+              <i class="fa-solid fa-trophy"></i>
+              <span>Ranking</span>
+            </button>
+          </div>
         </div>
-        <h3 class="text-xl font-bold text-gray-800">No hay menús disponibles</h3>
-        <p class="text-gray-500 max-w-sm text-sm">
-           Por el momento no hay fechas habilitadas para realizar pedidos.
-           Vuelve más tarde o contacta al administrador.
-        </p>
-      </div>
 
-      <!-- Order Confirmed State (Receipt Style) -->
-      <div v-if="myOrder" class="max-w-md mx-auto bg-white rounded-[2rem] shadow-xl shadow-green-900/5 overflow-hidden text-center relative mt-8 border border-gray-100 animate-fade-in-up">
+        <button
+          v-if="chefGame.visible"
+          @click="handleChefTargetTap"
+          :class="['chef-game-target', 'chef-pos-' + chefGame.position, 'chef-target-' + chefGame.kind, { 'is-bonus': chefGame.bonusMode }]"
+          :aria-label="getChefTargetLabel()"
+          :title="getChefTargetLabel()">
+          <span v-if="chefGame.kind === 'chef'" class="chef-character" aria-hidden="true">
+            <span class="chef-hat"><i></i><i></i><i></i></span>
+            <span class="chef-face">
+              <i class="chef-eye chef-eye-left"></i>
+              <i class="chef-eye chef-eye-right"></i>
+              <i class="chef-mustache"></i>
+            </span>
+            <i v-for="star in chefGame.starBursts" :key="star.id" class="chef-bonus-star fa-solid fa-star" :style="star.style"></i>
+          </span>
+          <span v-else-if="chefGame.kind === 'onion'" class="chef-onion" aria-hidden="true">
+            <i></i>
+          </span>
+          <span v-else class="chef-pan" aria-hidden="true">
+            <i></i>
+          </span>
+        </button>
+
+        <button
+          v-if="chefGame.cakeVisible"
+          @click.stop="handleChefCakeTap"
+          class="chef-cake-bonus"
+          :style="chefGame.cakeStyle"
+          aria-label="Atrapar bizcocho bonus"
+          title="Atrapar bizcocho bonus">
+          <span class="chef-cake" aria-hidden="true"><i></i><b></b></span>
+        </button>
+
+        <div v-if="chefGame.countdown > 0" class="chef-game-countdown">
+          El chef vuelve en <span>{{ chefGame.countdown }}s</span>
+        </div>
+
+        <div v-if="chefGame.message && chefGame.countdown <= 0" class="chef-game-toast" :class="{ 'chef-game-toast-combo': chefGame.combo }">
+          {{ chefGame.message }}
+        </div>
+
+        <transition name="receipt-swap" mode="out-in">
+        <div :key="chefGameCardKey" class="order-confirmation-card max-w-md mx-auto bg-white rounded-[2rem] shadow-xl shadow-green-900/5 overflow-hidden text-center relative border border-gray-100">
         <!-- Success Header -->
-        <div class="bg-gradient-to-br from-green-400 to-green-600 p-10 text-white relative overflow-hidden">
+        <div :class="[myOrder ? 'from-green-400 to-green-600' : 'from-amber-300 to-orange-500', 'bg-gradient-to-br p-10 text-white relative overflow-hidden']">
            <div class="w-24 h-24 bg-white/20 rounded-full absolute -top-10 -right-10 animate-pulse"></div>
            <div class="w-16 h-16 bg-white/10 rounded-full absolute bottom-5 left-5"></div>
 
-           <div class="w-20 h-20 bg-white text-green-500 rounded-full flex items-center justify-center text-3xl mx-auto shadow-lg mb-6 animate-bounce-slow">
-              <i class="fa-solid fa-check"></i>
+           <div :class="[myOrder ? 'text-green-500' : 'text-amber-500', 'w-20 h-20 bg-white rounded-full flex items-center justify-center text-3xl mx-auto shadow-lg mb-6 animate-bounce-slow']">
+              <i :class="myOrder ? 'fa-solid fa-check' : 'fa-solid fa-utensils'"></i>
            </div>
-           <h2 class="text-2xl font-bold mb-1 tracking-tight">¡Pedido Confirmado!</h2>
-           <p class="text-green-50 text-sm font-medium opacity-90">Tu almuerzo está asegurado</p>
+           <h2 class="text-2xl font-bold mb-1 tracking-tight">{{ myOrder ? 'Pedido confirmado' : 'No hay menu cargado aun' }}</h2>
+           <p class="text-white/90 text-sm font-medium">{{ myOrder ? 'Tu almuerzo esta asegurado' : 'Puedes jugar mientras el equipo carga el menu' }}</p>
         </div>
 
         <!-- Receipt Body -->
@@ -265,24 +332,32 @@
 
            <div class="space-y-6">
               <div class="flex justify-between items-center text-sm border-b border-gray-100 pb-4 border-dashed">
-                 <span class="text-gray-400 font-medium">Fecha de Entrega</span>
-                 <span class="font-bold text-gray-800 bg-gray-50 px-3 py-1 rounded-lg">{{ displayDate }}</span>
+                 <span class="text-gray-400 font-medium">{{ myOrder ? 'Fecha de Entrega' : 'Fecha' }}</span>
+                 <span class="font-bold text-gray-800 bg-gray-50 px-3 py-1 rounded-lg">{{ displayDate || 'Pendiente' }}</span>
               </div>
-              <div class="text-left">
+              <div v-if="myOrder" class="text-left">
                  <label class="text-xs text-gray-400 uppercase font-bold tracking-wider mb-2 block">Resumen del pedido</label>
                  <div class="bg-gray-50 p-5 rounded-2xl text-sm text-gray-700 font-medium leading-relaxed border border-gray-100">
                     {{ formatMenuText(myOrder.resumen) }}
                  </div>
               </div>
+              <div v-else class="text-left">
+                 <label class="text-xs text-gray-400 uppercase font-bold tracking-wider mb-2 block">Estado del menu</label>
+                 <div class="bg-amber-50 p-5 rounded-2xl text-sm text-amber-900 font-medium leading-relaxed border border-amber-100">
+                    Todavia no hay menu disponible para esta fecha. Mini chef queda abierto mientras llega el menu.
+                 </div>
+              </div>
            </div>
 
-           <div class="mt-8">
+           <div v-if="myOrder" class="mt-8">
               <button v-if="!isCutoffPassed" @click="cancelOrder" :disabled="submitting" class="w-full py-4 rounded-xl border-2 border-red-50 text-red-500 font-bold hover:bg-red-50 hover:border-red-100 disabled:opacity-60 disabled:cursor-not-allowed transition-colors text-sm flex items-center justify-center gap-2 group">
                  <span v-if="submitting"><i class="fa-solid fa-circle-notch fa-spin"></i> Procesando...</span>
                  <span v-else><i class="fa-solid fa-trash-can opacity-70 group-hover:opacity-100"></i> Cancelar o modificar</span>
               </button>
            </div>
         </div>
+        </div>
+        </transition>
       </div>
 
       <!-- Menu Grid -->
@@ -375,13 +450,6 @@
 
         </div>
         
-        <div v-if="!menuLoaded && !loading" class="py-20 text-center text-gray-400">
-          <div class="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4 text-3xl">
-             <i class="fa-solid fa-utensils opacity-50"></i>
-          </div>
-          <p class="font-medium">No hay menú disponible para esta fecha.</p>
-        </div>
-
         <!-- Sticky Bottom Action Bar -->
         <!-- Logic: Sticky bottom by default (fixed), but if we scroll to bottom of container (past content), it should dock?
              Actually, standard fixed bottom bar is best for UX on mobile and desktop unless it covers content.
@@ -422,6 +490,158 @@
         </div>
       </div>
       </div> <!-- End User View -->
+
+      <!-- RANKING VIEW -->
+      <div v-if="viewMode === 'RANKING'" class="chef-ranking-view animate-fade-in">
+        <div class="chef-ranking-hero">
+          <button @click="returnToOrders" class="chef-ranking-back" title="Volver a pedidos">
+            <i class="fa-solid fa-arrow-left"></i>
+          </button>
+          <div>
+            <span class="chef-ranking-kicker">Ranking mensual</span>
+            <h2>Mini chef</h2>
+            <p>{{ chefRanking.monthLabel || chefGameState.monthLabel || 'Mes actual' }}</p>
+          </div>
+          <div class="chef-ranking-score">
+            <span>Tu puntaje</span>
+            <strong>{{ chefScore }}</strong>
+          </div>
+        </div>
+
+        <div v-if="chefRanking.currentUser" class="chef-ranking-current">
+          <div>
+            <span class="chef-ranking-kicker">Tu posicion</span>
+            <strong>#{{ chefRanking.currentUser.rank }}</strong>
+          </div>
+          <div>
+            <span>Aciertos</span>
+            <strong>{{ chefRanking.currentUser.hits }}</strong>
+          </div>
+          <div>
+            <span>Mejor racha</span>
+            <strong>{{ chefRanking.currentUser.bestStreak }}</strong>
+          </div>
+        </div>
+
+        <button
+          @click="chefRanking.showRules = !chefRanking.showRules"
+          class="chef-ranking-rules-toggle"
+          type="button"
+          :aria-expanded="chefRanking.showRules ? 'true' : 'false'"
+          aria-controls="chef-ranking-rules-panel">
+          <span>
+            <i class="fa-solid fa-circle-info"></i>
+            Reglas del juego
+          </span>
+          <i :class="chefRanking.showRules ? 'fa-solid fa-chevron-up' : 'fa-solid fa-chevron-down'"></i>
+        </button>
+
+        <transition name="rules-panel">
+        <section v-if="chefRanking.showRules" id="chef-ranking-rules-panel" class="chef-ranking-rules" aria-labelledby="chef-ranking-rules-title">
+          <div class="chef-ranking-rules-head">
+            <div>
+              <span class="chef-ranking-kicker">Reglas del juego</span>
+              <h3 id="chef-ranking-rules-title">Como se gana puntaje este mes</h3>
+            </div>
+            <p>
+              El ranking se reinicia cada mes y consolida los puntos guardados por usuario.
+            </p>
+          </div>
+
+          <div class="chef-ranking-rules-grid">
+            <div class="chef-ranking-rule">
+              <i class="fa-solid fa-utensils"></i>
+              <div>
+                <strong>Chef</strong>
+                <p>Cada acierto suma 1 punto y fortalece tu racha.</p>
+              </div>
+            </div>
+            <div class="chef-ranking-rule">
+              <i class="fa-solid fa-bowl-rice"></i>
+              <div>
+                <strong>Trampas</strong>
+                <p>La cebolla y el sarten restan puntos y retrasan la siguiente aparicion.</p>
+              </div>
+            </div>
+            <div class="chef-ranking-rule">
+              <i class="fa-solid fa-clock"></i>
+              <div>
+                <strong>Tiempo diario</strong>
+                <p>Cada usuario dispone de 15 minutos por dia para jugar.</p>
+              </div>
+            </div>
+            <div class="chef-ranking-rule">
+              <i class="fa-solid fa-wand-magic-sparkles"></i>
+              <div>
+                <strong>Chef bonus</strong>
+                <p>Cada 8 chefs seguidos activa un chef brillante de 3 segundos.</p>
+              </div>
+            </div>
+            <div class="chef-ranking-rule">
+              <i class="fa-solid fa-cake-candles"></i>
+              <div>
+                <strong>Bizcocho</strong>
+                <p>Aparece pocas veces y vale 20 puntos si lo atrapas rapido.</p>
+              </div>
+            </div>
+            <div class="chef-ranking-rule">
+              <i class="fa-solid fa-cloud-arrow-up"></i>
+              <div>
+                <strong>Guardado</strong>
+                <p>Puedes guardar tu progreso manualmente y tambien al agotarse el tiempo.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+        </transition>
+
+        <div class="chef-ranking-board">
+          <div v-if="chefRanking.loading" class="chef-ranking-loading">
+            <div class="w-12 h-12 border-4 border-amber-100 border-t-amber-500 rounded-full animate-spin"></div>
+            <span>Cargando ranking...</span>
+          </div>
+          <div v-else-if="chefRanking.error" class="chef-ranking-empty">
+            <i class="fa-solid fa-circle-exclamation"></i>
+            <p>{{ chefRanking.error }}</p>
+            <button @click="loadChefRanking(true)">Reintentar</button>
+          </div>
+          <div v-else-if="chefRanking.rows.length === 0" class="chef-ranking-empty">
+            <i class="fa-solid fa-trophy"></i>
+            <p>Todavia no hay puntos registrados este mes.</p>
+          </div>
+          <div v-else class="overflow-x-auto">
+            <table class="chef-ranking-table">
+              <thead>
+                <tr>
+                  <th>Posicion</th>
+                  <th>Usuario</th>
+                  <th>Departamento</th>
+                  <th>Puntos</th>
+                  <th>Aciertos</th>
+                  <th>Racha</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in chefRanking.rows" :key="row.rank + '-' + row.nombre" :class="{ 'is-current': row.isCurrent }">
+                  <td>
+                    <span class="chef-rank-number">#{{ row.rank }}</span>
+                  </td>
+                  <td>
+                    <div class="chef-ranking-user">
+                      <span>{{ row.nombre ? row.nombre.charAt(0).toUpperCase() : 'U' }}</span>
+                      <strong>{{ row.nombre }}</strong>
+                    </div>
+                  </td>
+                  <td>{{ row.departamento || '-' }}</td>
+                  <td><strong>{{ row.score }}</strong></td>
+                  <td>{{ row.hits }}</td>
+                  <td>{{ row.bestStreak }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
 
       <!-- ADMIN VIEW -->
       <div v-if="viewMode === 'ADMIN'" class="relative animate-fade-in min-h-[500px]">

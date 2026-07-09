@@ -1,5 +1,5 @@
 <script>
-const { createApp, ref, computed, onMounted, reactive, nextTick } = Vue;
+const { createApp, ref, computed, onMounted, reactive, nextTick, watch } = Vue;
 
 createApp({
   setup() {
@@ -34,6 +34,66 @@ createApp({
     });
     const summaryCostHintEl = ref(null);
     const hasFocusedSummaryCostHint = ref(false);
+    const chefGameState = ref({
+      score: 0,
+      remainingSeconds: 900,
+      dailyLimitSeconds: 900,
+      streak: 0,
+      bestStreak: 0,
+      penaltySeconds: 0,
+      monthLabel: ''
+    });
+    const chefGame = reactive({
+      active: false,
+      visible: false,
+      kind: 'chef',
+      trapKind: '',
+      position: 'side-left-mid',
+      message: '',
+      combo: '',
+      countdown: 0,
+      bonusMode: false,
+      bonusPending: false,
+      starBursts: [],
+      cakeVisible: false,
+      cakeStyle: {},
+      cakeTimer: null,
+      cakeMessageTimer: null,
+      cakeToken: 0,
+      dirty: false,
+      syncing: false,
+      startTimer: null,
+      roundTimer: null,
+      countdownTimer: null,
+      feedbackTimer: null,
+      clockTimer: null,
+      roundStartedAt: 0,
+      roundDurationMs: 0,
+      roundToken: 0,
+      startedForKey: ''
+    });
+    const CHEF_BONUS_STREAK_INTERVAL = 8;
+    const CHEF_BONUS_DURATION_MS = 3000;
+    const CHEF_CAKE_CHANCE = 0.004;
+    const CHEF_SCORE_CHEF = 1;
+    const CHEF_SCORE_COMBO_3 = 1;
+    const CHEF_SCORE_COMBO_5 = 2;
+    const CHEF_SCORE_PERFECT = 4;
+    const CHEF_SCORE_BONUS_TAP = 1;
+    const CHEF_SCORE_CAKE = 20;
+    const CHEF_SCORE_MISS = -2;
+    const CHEF_SCORE_ONION = -4;
+    const CHEF_SCORE_PAN = -6;
+    const chefRanking = reactive({
+      loading: false,
+      loaded: false,
+      error: '',
+      rows: [],
+      currentUser: null,
+      monthKey: '',
+      monthLabel: '',
+      showRules: false
+    });
     
     // Summary Date Range
     const summaryDateStart = ref('');
@@ -141,8 +201,35 @@ createApp({
     const isDeptAdmin = computed(() => activeUser.value.rol === 'ADMIN_DEP');
     const isAdminGen = computed(() => activeUser.value.rol === 'ADMIN_GEN');
     const isTestEmailMode = computed(() => String(adminState.config['TEST_EMAIL_MODE'] || '').trim().toUpperCase() === 'TRUE');
+    const chefScore = computed(() => Number(chefGameState.value?.score || 0));
+    const chefRemainingSeconds = computed(() => Math.max(0, Number(chefGameState.value?.remainingSeconds || 0)));
+    const chefGameAvailable = computed(() => chefRemainingSeconds.value > 0);
+    const chefDailyProgress = computed(() => {
+      const limit = Number(chefGameState.value?.dailyLimitSeconds || 900);
+      const used = Math.max(0, Number(chefGameState.value?.usedSeconds || 0));
+      if (!limit) return 0;
+      return Math.min(100, Math.round((used / limit) * 100));
+    });
+    const chefRemainingLabel = computed(() => {
+      const total = chefRemainingSeconds.value;
+      const minutes = Math.floor(total / 60);
+      const seconds = total % 60;
+      return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    });
     
     const menuLoaded = computed(() => menu.value && Object.keys(menu.value).length > 0);
+    const chefGameCardVisible = computed(() => {
+      if (viewMode.value !== 'USER' || loading.value) return false;
+      if (myOrder.value) return true;
+      return !menuLoaded.value;
+    });
+    const chefGameCardKey = computed(() => {
+      if (myOrder.value) {
+        return `${currentDate.value || 'pedido'}:${myOrder.value.id || 'pedido'}`;
+      }
+      return `${currentDate.value || 'sin-fecha'}:sin-menu`;
+    });
+    const chefGameInCooldown = computed(() => chefGame.active && chefGame.countdown > 0 && Boolean(chefGame.countdownTimer));
 
     // FILTERED LISTS
     const filteredUsers = computed(() => {
@@ -501,6 +588,7 @@ createApp({
       mealPricing.value = res.mealPricing || { current: 57, history: [{ from: '1900-01-01', price: 57 }] };
       hintConfig.value = res.hintConfig || hintConfig.value;
       todayYmd.value = res.todayYmd || todayYmd.value;
+      setChefGameState(res.chefGame || {});
       hasFocusedSummaryCostHint.value = false;
       if (res.activeUser?.email) startHeartbeat();
       else stopHeartbeat();
@@ -530,6 +618,544 @@ createApp({
       resetSelectionState();
     };
 
+    const setChefGameState = (state = {}) => {
+      chefGameState.value = {
+        score: 0,
+        hits: 0,
+        misses: 0,
+        usedSeconds: 0,
+        remainingSeconds: 900,
+        dailyLimitSeconds: 900,
+        streak: 0,
+        bestStreak: 0,
+        penaltySeconds: 0,
+        monthLabel: '',
+        ...state
+      };
+      chefGame.dirty = false;
+    };
+
+    const clearChefRoundTimers = () => {
+      if (chefGame.startTimer) window.clearTimeout(chefGame.startTimer);
+      if (chefGame.roundTimer) window.clearTimeout(chefGame.roundTimer);
+      if (chefGame.countdownTimer) window.clearInterval(chefGame.countdownTimer);
+      if (chefGame.feedbackTimer) window.clearTimeout(chefGame.feedbackTimer);
+      chefGame.startTimer = null;
+      chefGame.roundTimer = null;
+      chefGame.countdownTimer = null;
+      chefGame.feedbackTimer = null;
+    };
+
+    const clearChefCakeTimer = () => {
+      if (chefGame.cakeTimer) window.clearTimeout(chefGame.cakeTimer);
+      if (chefGame.cakeMessageTimer) window.clearTimeout(chefGame.cakeMessageTimer);
+      chefGame.cakeTimer = null;
+      chefGame.cakeMessageTimer = null;
+      chefGame.cakeVisible = false;
+    };
+
+    const clearChefTimers = () => {
+      clearChefRoundTimers();
+      clearChefCakeTimer();
+      if (chefGame.clockTimer) window.clearInterval(chefGame.clockTimer);
+      chefGame.clockTimer = null;
+    };
+
+    const stopChefGame = (options = {}) => {
+      clearChefTimers();
+      chefGame.active = false;
+      chefGame.visible = false;
+      chefGame.countdown = 0;
+      chefGame.message = '';
+      chefGame.combo = '';
+      chefGame.bonusMode = false;
+      chefGame.starBursts = [];
+      chefGame.syncing = false;
+      if (options.clearKey) chefGame.startedForKey = '';
+    };
+
+    const pauseChefGame = () => {
+      clearChefTimers();
+      chefGame.active = false;
+      chefGame.visible = false;
+      chefGame.countdown = 0;
+      chefGame.message = '';
+      chefGame.combo = '';
+      chefGame.bonusMode = false;
+      chefGame.starBursts = [];
+    };
+
+    const clampNumber = (value, min, max) => Math.min(max, Math.max(min, value));
+
+    const addChefBonusStars = () => {
+      const burstId = Date.now() + Math.random();
+      const stars = Array.from({ length: 6 }, (_, index) => {
+        const angle = ((Math.PI * 2) / 6) * index + (Math.random() * 0.5);
+        const distance = 1.6 + Math.random() * 1.8;
+        return {
+          id: `${burstId}-${index}`,
+          style: {
+            '--star-x': `${Math.cos(angle) * distance}rem`,
+            '--star-y': `${Math.sin(angle) * distance}rem`,
+            '--star-rot': `${Math.round((Math.random() * 160) - 80)}deg`
+          }
+        };
+      });
+      chefGame.starBursts = [...chefGame.starBursts, ...stars];
+      window.setTimeout(() => {
+        const ids = new Set(stars.map(star => star.id));
+        chefGame.starBursts = chefGame.starBursts.filter(star => !ids.has(star.id));
+      }, 520);
+    };
+
+    const maybeLaunchChefCake = () => {
+      if (!chefGame.active || chefGame.cakeVisible || Math.random() > CHEF_CAKE_CHANCE) return;
+
+      const vectors = [
+        { x: -22, y: -12, rot: -380 },
+        { x: 21, y: -10, rot: 420 },
+        { x: -23, y: 6, rot: -310 },
+        { x: 22, y: 8, rot: 360 },
+        { x: -15, y: -20, rot: -450 },
+        { x: 15, y: -21, rot: 450 }
+      ];
+      const vector = vectors[Math.floor(Math.random() * vectors.length)];
+      const jitterX = (Math.random() * 4) - 2;
+      const jitterY = (Math.random() * 3) - 1.5;
+      chefGame.cakeToken += 1;
+      chefGame.cakeVisible = true;
+      chefGame.cakeStyle = {
+        '--cake-x': `${vector.x + jitterX}rem`,
+        '--cake-y': `${vector.y + jitterY}rem`,
+        '--cake-rot': `${vector.rot}deg`,
+        '--cake-duration': `${720 + Math.round(Math.random() * 180)}ms`
+      };
+
+      const cakeToken = chefGame.cakeToken;
+      if (chefGame.cakeTimer) window.clearTimeout(chefGame.cakeTimer);
+      chefGame.cakeTimer = window.setTimeout(() => {
+        if (cakeToken !== chefGame.cakeToken) return;
+        chefGame.cakeVisible = false;
+        chefGame.cakeTimer = null;
+      }, 940);
+    };
+
+    const handleChefCakeTap = () => {
+      if (!chefGame.cakeVisible || chefGame.syncing) return;
+      if (chefGame.cakeTimer) window.clearTimeout(chefGame.cakeTimer);
+      chefGame.cakeTimer = null;
+      chefGame.cakeToken += 1;
+      chefGame.cakeVisible = false;
+      chefGameState.value = {
+        ...chefGameState.value,
+        score: Math.max(0, Number(chefGameState.value?.score || 0) + CHEF_SCORE_CAKE)
+      };
+      markChefGameDirty();
+      chefGame.combo = 'Bizcocho bonus';
+      chefGame.message = `+${CHEF_SCORE_CAKE} bizcocho`;
+      if (chefGame.cakeMessageTimer) window.clearTimeout(chefGame.cakeMessageTimer);
+      chefGame.cakeMessageTimer = window.setTimeout(() => {
+        chefGame.cakeMessageTimer = null;
+        chefGame.combo = '';
+        if (!chefGame.countdown && !chefGame.visible) chefGame.message = '';
+      }, 700);
+    };
+
+    const recordChefBonusTap = () => {
+      chefGameState.value = {
+        ...chefGameState.value,
+        score: Math.max(0, Number(chefGameState.value?.score || 0) + CHEF_SCORE_BONUS_TAP)
+      };
+      markChefGameDirty();
+      chefGame.message = '+1';
+      addChefBonusStars();
+    };
+
+    const scheduleChefGameStart = (force = false) => {
+      clearChefRoundTimers();
+      chefGame.visible = false;
+      chefGame.countdown = 0;
+      chefGame.combo = '';
+      chefGame.bonusMode = false;
+      chefGame.starBursts = [];
+
+      if (viewMode.value !== 'USER' || !chefGameCardVisible.value) {
+        chefGame.active = false;
+        return;
+      }
+
+      const orderKey = chefGameCardKey.value;
+      const hasLiveRound = chefGame.visible || chefGame.syncing || chefGame.startTimer || chefGame.roundTimer || chefGame.countdownTimer || chefGame.feedbackTimer;
+      if (!force && chefGame.active && chefGame.startedForKey === orderKey && hasLiveRound) return;
+
+      chefGame.startedForKey = orderKey;
+      chefGame.active = false;
+
+      if (!chefGameAvailable.value) {
+        chefGame.message = 'Tiempo diario agotado';
+        return;
+      }
+
+      chefGame.message = '';
+    };
+
+    const startChefCountdown = (seconds, done) => {
+      clearChefRoundTimers();
+      chefGame.visible = false;
+      chefGame.countdown = Math.max(0, Number(seconds || 0));
+      if (chefGame.countdown <= 0) {
+        done();
+        return;
+      }
+
+      chefGame.countdownTimer = window.setInterval(() => {
+        chefGame.countdown -= 1;
+        if (chefGame.countdown <= 0) {
+          window.clearInterval(chefGame.countdownTimer);
+          chefGame.countdownTimer = null;
+          done();
+        }
+      }, 1000);
+    };
+
+    const markChefGameDirty = () => {
+      chefGame.dirty = true;
+      chefRanking.loaded = false;
+    };
+
+    const tickChefGameClock = () => {
+      if (!chefGame.active || !chefGameAvailable.value) return;
+      const usedSeconds = Number(chefGameState.value?.usedSeconds || 0) + 1;
+      const dailyLimitSeconds = Number(chefGameState.value?.dailyLimitSeconds || 900);
+      chefGameState.value = {
+        ...chefGameState.value,
+        usedSeconds: Math.min(dailyLimitSeconds, usedSeconds),
+        remainingSeconds: Math.max(0, dailyLimitSeconds - usedSeconds)
+      };
+      markChefGameDirty();
+
+      if (!chefGameAvailable.value) {
+        pauseChefGame();
+        chefGame.message = 'Tiempo diario agotado';
+        syncChefGame(true);
+      }
+    };
+
+    const startChefClock = () => {
+      if (chefGame.clockTimer) return;
+      chefGame.clockTimer = window.setInterval(tickChefGameClock, 1000);
+    };
+
+    const startChefGame = () => {
+      if (viewMode.value !== 'USER' || !chefGameCardVisible.value || !chefGameAvailable.value) return;
+      if (!chefGame.startedForKey) scheduleChefGameStart(true);
+      chefGame.active = true;
+      chefGame.message = '';
+      startChefClock();
+      queueChefRound(80, false);
+    };
+
+    const toggleChefGamePlay = () => {
+      if (chefGameInCooldown.value) return;
+      if (chefGame.active) {
+        pauseChefGame();
+      } else {
+        startChefGame();
+      }
+    };
+
+    function queueChefRound(delayMs = 0, usePenalty = false) {
+      if (viewMode.value !== 'USER' || !chefGameCardVisible.value) {
+        stopChefGame();
+        return;
+      }
+
+      if (!chefGameAvailable.value) {
+        stopChefGame();
+        chefGame.active = true;
+        chefGame.message = 'Tiempo diario agotado';
+        return;
+      }
+
+      const penalty = usePenalty ? Number(chefGameState.value?.penaltySeconds || 0) : 0;
+      if (penalty > 0) {
+        chefGame.message = '';
+        startChefCountdown(penalty, () => spawnChefTarget(delayMs));
+        return;
+      }
+
+      clearChefRoundTimers();
+      chefGame.startTimer = window.setTimeout(() => spawnChefTarget(0), Math.max(0, delayMs));
+    }
+
+    function spawnChefTarget(extraDelay = 0) {
+      if (extraDelay > 0) {
+        chefGame.startTimer = window.setTimeout(() => spawnChefTarget(0), extraDelay);
+        return;
+      }
+
+      if (viewMode.value !== 'USER' || !chefGameCardVisible.value || !chefGame.active || !chefGameAvailable.value) return;
+
+      const streak = Number(chefGameState.value?.streak || 0);
+      const trapChance = clampNumber(0.18 + (streak * 0.012), 0.18, 0.34);
+      const roll = Math.random();
+      const positions = ['side-left-high', 'side-left-mid', 'side-left-low', 'side-right-high', 'side-right-mid', 'side-right-low'];
+      const isBonusChef = chefGame.bonusPending && streak >= CHEF_BONUS_STREAK_INTERVAL;
+      const kind = isBonusChef ? 'chef' : (roll < trapChance
+        ? (Math.random() > 0.5 ? 'onion' : 'pan')
+        : 'chef');
+
+      chefGame.kind = kind;
+      chefGame.trapKind = kind === 'chef' ? '' : kind.toUpperCase();
+      chefGame.position = positions[Math.floor(Math.random() * positions.length)];
+      chefGame.bonusMode = isBonusChef;
+      chefGame.bonusPending = false;
+      chefGame.visible = true;
+      chefGame.countdown = 0;
+      chefGame.message = '';
+      chefGame.starBursts = [];
+      chefGame.roundStartedAt = Date.now();
+      chefGame.roundToken += 1;
+      const currentRoundToken = chefGame.roundToken;
+      chefGame.roundDurationMs = isBonusChef
+        ? CHEF_BONUS_DURATION_MS
+        : kind === 'chef'
+        ? clampNumber(1200 - (streak * 55), 520, 1200)
+        : (kind === 'pan' ? 2400 : 2000);
+      maybeLaunchChefCake();
+
+      chefGame.roundTimer = window.setTimeout(() => {
+        if (currentRoundToken !== chefGame.roundToken) return;
+        if (chefGame.syncing) return;
+        if (!chefGame.visible) return;
+        if (chefGame.bonusMode) {
+          finishChefBonusRound();
+        } else if (chefGame.kind === 'chef') {
+          recordChefEvent('MISS');
+        } else {
+          recordChefEvent('TICK');
+        }
+      }, chefGame.roundDurationMs);
+    }
+
+    function finishChefBonusRound() {
+      if (chefGame.roundTimer) window.clearTimeout(chefGame.roundTimer);
+      chefGame.roundTimer = null;
+      chefGame.roundToken += 1;
+      chefGame.visible = false;
+      chefGame.bonusMode = false;
+      chefGame.starBursts = [];
+      chefGame.message = '';
+      if (!chefGame.active || !chefGameAvailable.value) return;
+      queueChefRound(120, false);
+    }
+
+    const getChefTargetLabel = () => {
+      if (chefGame.kind === 'chef' && chefGame.bonusMode) return 'Chef bonus';
+      if (chefGame.kind === 'chef') return 'Tocar chef';
+      if (chefGame.kind === 'pan') return 'Sarten quemado';
+      return 'Cebolla podrida';
+    };
+
+    const handleChefTargetTap = () => {
+      if (!chefGame.visible || chefGame.syncing) return;
+      if (chefGame.kind === 'chef' && chefGame.bonusMode) {
+        recordChefBonusTap();
+      } else if (chefGame.kind === 'chef') {
+        recordChefEvent('CHEF');
+      } else {
+        recordChefEvent('TRAP', chefGame.kind.toUpperCase());
+      }
+    };
+
+    const applyLocalChefEvent = (type, kind = '') => {
+      const current = { ...chefGameState.value };
+      const event = {
+        type,
+        delta: 0,
+        combo: '',
+        cooldownSeconds: 0,
+        capReached: !chefGameAvailable.value
+      };
+
+      if (type === 'CHEF') {
+        current.streak = Number(current.streak || 0) + 1;
+        current.hits = Number(current.hits || 0) + 1;
+        current.bestStreak = Math.max(Number(current.bestStreak || 0), current.streak);
+        current.penaltySeconds = Math.max(0, Number(current.penaltySeconds || 0) - 1);
+        event.delta = CHEF_SCORE_CHEF;
+
+        if (current.streak === 3) {
+          event.delta += CHEF_SCORE_COMBO_3;
+          event.combo = '3 chefs seguidos';
+        } else if (current.streak === 5) {
+          event.delta += CHEF_SCORE_COMBO_5;
+          event.combo = '5 chefs seguidos';
+        } else if (current.streak > 0 && current.streak % 10 === 0) {
+          event.delta += CHEF_SCORE_PERFECT;
+          event.combo = 'Racha perfecta';
+        }
+
+        if (current.streak > 0 && current.streak % CHEF_BONUS_STREAK_INTERVAL === 0) {
+          event.bonusNext = true;
+        }
+      } else if (type === 'TRAP') {
+        const trapPenalty = kind === 'PAN' ? 10 : 5;
+        current.streak = 0;
+        current.misses = Number(current.misses || 0) + 1;
+        current.penaltySeconds = Math.min(30, Number(current.penaltySeconds || 0) + trapPenalty);
+        event.delta = kind === 'PAN' ? CHEF_SCORE_PAN : CHEF_SCORE_ONION;
+        event.cooldownSeconds = current.penaltySeconds;
+      } else if (type === 'MISS') {
+        current.streak = 0;
+        current.misses = Number(current.misses || 0) + 1;
+        current.penaltySeconds = Math.min(30, Number(current.penaltySeconds || 0) + 1);
+        event.delta = CHEF_SCORE_MISS;
+        event.cooldownSeconds = current.penaltySeconds;
+      } else {
+        event.delta = 0;
+      }
+
+      if (event.delta < 0) current.score = Math.max(0, Number(current.score || 0) + event.delta);
+      chefGameState.value = current;
+      markChefGameDirty();
+      return event;
+    };
+
+    function recordChefEvent(type, kind = '') {
+      if (chefGame.roundTimer) window.clearTimeout(chefGame.roundTimer);
+      chefGame.roundTimer = null;
+      chefGame.roundToken += 1;
+      chefGame.visible = false;
+
+      const event = applyLocalChefEvent(type, kind);
+      if (event.combo && event.delta > 0) {
+        chefGame.combo = event.combo;
+        chefGame.message = `+${event.delta} ${event.combo}`;
+      } else {
+        chefGame.combo = '';
+        if (event.delta > 0) {
+          chefGame.message = `+${event.delta} puntos`;
+        } else if (event.delta < 0) {
+          chefGame.message = `${event.delta} puntos`;
+        } else {
+          chefGame.message = '';
+        }
+      }
+
+      if (event.capReached || !chefGameAvailable.value) {
+        pauseChefGame();
+        chefGame.message = 'Tiempo diario agotado';
+        syncChefGame(true);
+        return;
+      }
+
+      if (event.bonusNext) {
+        chefGame.bonusPending = true;
+        chefGame.combo = chefGame.combo || 'Bonus listo';
+        chefGame.message = event.combo && event.delta > 0 ? chefGame.message : `${chefGame.message || 'Bonus listo'} / bonus listo`;
+      }
+
+      const penalized = Number(event.cooldownSeconds || 0) > 0;
+      const nextDelay = event.delta > 0 ? 55 : 150;
+      if (chefGame.feedbackTimer) window.clearTimeout(chefGame.feedbackTimer);
+      chefGame.feedbackTimer = window.setTimeout(() => {
+        chefGame.feedbackTimer = null;
+        chefGame.combo = '';
+        if (!penalized) chefGame.message = '';
+        queueChefRound(nextDelay, penalized);
+      }, event.combo ? 420 : 90);
+    }
+
+    const syncChefGame = (silent = false, onDone = null) => {
+      if (chefGame.syncing) {
+        if (typeof onDone === 'function') onDone(false);
+        return;
+      }
+      if (!chefGame.dirty) {
+        if (typeof onDone === 'function') onDone(true);
+        return;
+      }
+      chefGame.syncing = true;
+      google.script.run
+        .withSuccessHandler(res => {
+          chefGame.syncing = false;
+          if (res && res.ok) {
+            setChefGameState(res.state || chefGameState.value);
+            chefGame.message = silent ? chefGame.message : 'Puntos guardados';
+            chefRanking.loaded = false;
+            if (!silent) {
+              if (chefGame.feedbackTimer) window.clearTimeout(chefGame.feedbackTimer);
+              chefGame.feedbackTimer = window.setTimeout(() => {
+                chefGame.feedbackTimer = null;
+                if (!chefGame.active) chefGame.message = '';
+              }, 1000);
+            }
+            if (typeof onDone === 'function') onDone(true);
+          } else if (!silent) {
+            chefGame.message = (res && res.msg) || 'No se pudo guardar';
+            if (typeof onDone === 'function') onDone(false);
+          } else {
+            if (typeof onDone === 'function') onDone(false);
+          }
+        })
+        .withFailureHandler(() => {
+          chefGame.syncing = false;
+          if (!silent) chefGame.message = 'Conexion perdida';
+          if (typeof onDone === 'function') onDone(false);
+        })
+        .apiSyncChefGameState({
+          targetEmail: user.value?.email || '',
+          state: chefGameState.value
+        });
+    };
+
+    const openChefRanking = () => {
+      if (chefGameInCooldown.value) return;
+      stopChefGame();
+      viewMode.value = 'RANKING';
+      if (chefGame.dirty) {
+        chefRanking.loading = true;
+        syncChefGame(true, () => {
+          chefRanking.loading = false;
+          loadChefRanking(true);
+        });
+      } else {
+        loadChefRanking(true);
+      }
+    };
+
+    const returnToOrders = () => {
+      viewMode.value = 'USER';
+      nextTick(() => scheduleChefGameStart(false));
+    };
+
+    const loadChefRanking = (force = false) => {
+      if (chefRanking.loading) return;
+      if (chefRanking.loaded && !force) return;
+
+      chefRanking.loading = true;
+      chefRanking.error = '';
+      google.script.run
+        .withSuccessHandler(res => {
+          chefRanking.loading = false;
+          if (res && res.ok) {
+            chefRanking.loaded = true;
+            chefRanking.rows = res.rows || [];
+            chefRanking.currentUser = res.currentUser || null;
+            chefRanking.monthKey = res.monthKey || '';
+            chefRanking.monthLabel = res.monthLabel || '';
+          } else {
+            chefRanking.error = (res && res.msg) || 'No se pudo cargar el ranking.';
+          }
+        })
+        .withFailureHandler(() => {
+          chefRanking.loading = false;
+          chefRanking.error = 'Error de conexion cargando el ranking.';
+        })
+        .apiGetChefGameRanking(user.value?.email || '');
+    };
+
     const loadData = (targetDate = null) => {
       loading.value = true;
       // Limpiamos selección al cambiar de día o recargar
@@ -553,6 +1179,7 @@ createApp({
     // Cambiar de fecha (Tabs superiores)
     const changeDate = (dateStr) => {
       if (dateStr === currentDate.value) return;
+      if (chefGameInCooldown.value) return;
 
       if (allMenus.value[dateStr]) {
         currentDate.value = dateStr;
@@ -613,11 +1240,13 @@ createApp({
     };
 
     const toggleAdminView = () => {
-       if (viewMode.value === 'USER') {
+       stopChefGame();
+       if (viewMode.value !== 'ADMIN') {
           viewMode.value = 'ADMIN';
           loadAdminData();
        } else {
           viewMode.value = 'USER';
+          nextTick(() => scheduleChefGameStart(false));
        }
     };
 
@@ -1251,6 +1880,7 @@ createApp({
             myOrder.value = nextOrder;
             if (res.adminData) adminData.value = res.adminData;
             resetSelectionState();
+            nextTick(() => scheduleChefGameStart(true));
           } else {
             showModal("Error: " + res.msg, "Error");
           }
@@ -1276,6 +1906,7 @@ createApp({
                  myOrder.value = null;
                  if (res.adminData) adminData.value = res.adminData;
                  resetSelectionState();
+                 stopChefGame({ clearKey: true });
                } else {
                   showModal(res.msg, "Error");
                }
@@ -1374,6 +2005,18 @@ createApp({
     };
 
     // Inicialización
+    watch(
+      () => [viewMode.value, chefGameCardVisible.value ? chefGameCardKey.value : ''],
+      () => {
+        if (viewMode.value === 'USER' && chefGameCardVisible.value) {
+          nextTick(() => scheduleChefGameStart(false));
+        } else {
+          stopChefGame();
+        }
+      },
+      { flush: 'post' }
+    );
+
     onMounted(() => {
       initSummaryDates();
       const initialData = window.__INITIAL_DATA__;
@@ -1390,12 +2033,14 @@ createApp({
       loading, submitting, user, menu, myOrder, adminData, 
       currentDate, dates, comments,
       summaryDateStart, summaryDateEnd, activeUsersCount,
+      chefGameState, chefGame, chefRanking,
       
       // Computed
       isAdmin, isDeptAdmin, isAdminGen, isTestEmailMode, menuLoaded, categories,
       selectedCount, validationError, hasBlockingErrors, showGrainWarning,
       isDefaultSummary,
       displayDate, isCutoffPassed,
+      chefScore, chefRemainingSeconds, chefGameAvailable, chefDailyProgress, chefRemainingLabel, chefGameCardVisible, chefGameCardKey, chefGameInCooldown,
       
       // Métodos / Reglas UI
       toggleItem, isSelected, hasSelectionInCat, isCatDisabled, isItemDisabled,
@@ -1407,7 +2052,7 @@ createApp({
 
       // Acciones Principales
       changeDate, submitOrder, cancelOrder, toggleReminders, dismissBanner, dismissSummaryCostHint, dismissCaldoMultiHint, changeProxyUser,
-      toggleAdminView, loadAdminData,
+      toggleAdminView, loadAdminData, openChefRanking, returnToOrders, loadChefRanking, handleChefTargetTap, handleChefCakeTap, getChefTargetLabel, toggleChefGamePlay, syncChefGame,
 
       // Admin Actions
       openUserModal, saveUser, toggleUserStatus, adminCancelOrder,
