@@ -1,9 +1,18 @@
 /**
  * Code.gs - Backend V5 (Refactor & New Features)
  */
-const APP_VERSION = 'v7.16';
+const APP_VERSION = 'v7.25';
 const SPREADSHEET_RETRY_ATTEMPTS = 4;
 const SPREADSHEET_RETRY_DELAY_MS = 1500;
+const CHEF_GAME_DAILY_LIMIT_SECONDS = 15 * 60;
+const CHEF_GAME_SCORE_CHEF = 1;
+const CHEF_GAME_SCORE_COMBO_3 = 1;
+const CHEF_GAME_SCORE_COMBO_5 = 2;
+const CHEF_GAME_SCORE_PERFECT = 4;
+const CHEF_GAME_SCORE_MISS = -2;
+const CHEF_GAME_SCORE_ONION = -4;
+const CHEF_GAME_SCORE_PAN = -6;
+const CHEF_GAME_SCHEMA_CACHE_KEY = 'CHEF_GAME_SCHEMA_READY_V1';
 
 // === RUTAS E INICIO ===
 
@@ -197,7 +206,7 @@ function serializeForInlineScript_(value) {
 function apiGetInitData(requestedDateStr, impersonateEmail) {
   try {
     const ss = SpreadsheetApp.getActive();
-    const usersData = readSheetValues_(ss.getSheetByName('Usuarios'), 7);
+    const usersData = readSheetValues_(ss.getSheetByName('Usuarios'));
     const deptMap = getDepartmentMap_();
 
     const activeUser = getUserInfo_(null, usersData, deptMap);
@@ -223,6 +232,7 @@ function apiGetInitData(requestedDateStr, impersonateEmail) {
     const initCacheKey = getInitCacheKey_(activeUser.email, targetUser.email, requestedDateStr || '');
     const cachedResponse = readJsonCache_(initCacheKey);
     if (cachedResponse) {
+      cachedResponse.chefGame = getChefGameState_(targetUser.email);
       return cachedResponse;
     }
 
@@ -280,6 +290,7 @@ function apiGetInitData(requestedDateStr, impersonateEmail) {
       mealPricing: { current: mealPriceCurrent, history: mealPriceHistory },
       hintConfig: hintConfig,
       todayYmd: todayYmd,
+      chefGame: getChefGameState_(targetUser.email),
       deptMap: deptMap
     };
 
@@ -527,6 +538,137 @@ function apiDismissCaldoMultiHint() {
    return apiSetUserPreference('caldo_multi_hint_count', count);
 }
 // === AUTOMATIZACIÓN (TRIGGERS) ===
+
+function apiRecordChefGameEvent(payload) {
+  const lock = LockService.getScriptLock();
+  try {
+    if (!lock.tryLock(3000)) {
+      throw new Error("El juego esta ocupado guardando otra jugada. Intenta de nuevo.");
+    }
+
+    const ss = SpreadsheetApp.getActive();
+    const sh = ss.getSheetByName('Usuarios');
+    const colMap = ensureChefGameColumns_(sh);
+    const usersData = sh.getDataRange().getValues();
+    const deptMap = getDepartmentMap_();
+    const activeUser = getUserInfo_(null, usersData, deptMap);
+    if (!activeUser || activeUser.estado !== 'ACTIVO') throw new Error("Usuario no autorizado.");
+
+    const targetUser = resolveChefGameTargetUser_(payload && payload.targetEmail, activeUser, usersData, deptMap);
+    const context = getChefGameUserContext_(targetUser.email, sh, colMap, usersData);
+    if (!context) throw new Error("Usuario no encontrado.");
+
+    const eventType = normalizeChefGameEventType_(payload && payload.type);
+    const now = new Date();
+    const state = normalizeChefGameState_(context.row, colMap, now);
+    const event = applyChefGameEvent_(state, eventType, payload, now);
+
+    writeChefGameState_(sh, context.rowIndex, colMap, state, now);
+
+    return {
+      ok: true,
+      state: state,
+      event: event
+    };
+  } catch (e) {
+    return { ok: false, msg: e.message };
+  } finally {
+    try {
+      lock.releaseLock();
+    } catch (e) {
+      // Ignore lock release errors.
+    }
+  }
+}
+
+function apiGetChefGameRanking(targetEmail) {
+  try {
+    const ss = SpreadsheetApp.getActive();
+    const sh = ss.getSheetByName('Usuarios');
+    const colMap = ensureChefGameColumns_(sh);
+    const data = sh.getDataRange().getValues();
+    const deptMap = getDepartmentMap_();
+    const activeUser = getUserInfo_(null, data, deptMap);
+    if (!activeUser || activeUser.estado !== 'ACTIVO') throw new Error("Usuario no autorizado.");
+
+    const targetUser = resolveChefGameTargetUser_(targetEmail, activeUser, data, deptMap);
+    const now = new Date();
+    const rows = [];
+
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][4] || '').trim().toUpperCase() !== 'ACTIVO') continue;
+      const game = normalizeChefGameState_(data[i], colMap, now);
+      rows.push({
+        _email: String(data[i][0] || '').toLowerCase(),
+        nombre: data[i][1] || 'Usuario',
+        departamento: deptMap[data[i][2]] || data[i][2] || '',
+        score: game.score,
+        hits: game.hits,
+        misses: game.misses,
+        bestStreak: game.bestStreak
+      });
+    }
+
+    rows.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      if (b.hits !== a.hits) return b.hits - a.hits;
+      if (a.misses !== b.misses) return a.misses - b.misses;
+      return String(a.nombre).localeCompare(String(b.nombre));
+    });
+
+    rows.forEach((row, index) => {
+      row.rank = index + 1;
+      row.isCurrent = row._email === String(targetUser.email || '').toLowerCase();
+      delete row._email;
+    });
+
+    const currentRow = rows.find(row => row.isCurrent) || null;
+    return {
+      ok: true,
+      monthKey: getChefGameMonthKey_(now),
+      monthLabel: getChefGameMonthLabel_(now),
+      rows: rows.slice(0, 50),
+      currentUser: currentRow
+    };
+  } catch (e) {
+    return { ok: false, msg: e.message };
+  }
+}
+
+function apiSyncChefGameState(payload) {
+  const lock = LockService.getScriptLock();
+  try {
+    if (!lock.tryLock(3000)) {
+      throw new Error("No se pudo guardar el juego ahora. Intenta de nuevo.");
+    }
+
+    const ss = SpreadsheetApp.getActive();
+    const sh = ss.getSheetByName('Usuarios');
+    const colMap = ensureChefGameColumns_(sh);
+    const usersData = sh.getDataRange().getValues();
+    const deptMap = getDepartmentMap_();
+    const activeUser = getUserInfo_(null, usersData, deptMap);
+    if (!activeUser || activeUser.estado !== 'ACTIVO') throw new Error("Usuario no autorizado.");
+
+    const targetUser = resolveChefGameTargetUser_(payload && payload.targetEmail, activeUser, usersData, deptMap);
+    const context = getChefGameUserContext_(targetUser.email, sh, colMap, usersData);
+    if (!context) throw new Error("Usuario no encontrado.");
+
+    const now = new Date();
+    const previousState = normalizeChefGameState_(context.row, colMap, now);
+    const state = sanitizeChefGameSubmittedState_(payload && payload.state, now, previousState);
+    writeChefGameState_(sh, context.rowIndex, colMap, state, now);
+    return { ok: true, state: state };
+  } catch (e) {
+    return { ok: false, msg: e.message };
+  } finally {
+    try {
+      lock.releaseLock();
+    } catch (e) {
+      // Ignore lock release errors.
+    }
+  }
+}
 
 function scheduledSendReminders() {
   // Only run on business days
@@ -1963,6 +2105,325 @@ function getUsersByDept_(deptId, usersData) {
     }
   }
   return users;
+}
+
+function getChefGameHeaders_() {
+  return [
+    'juego_mes',
+    'juego_puntos_mes',
+    'juego_aciertos_mes',
+    'juego_fallos_mes',
+    'juego_tiempo_fecha',
+    'juego_segundos_hoy',
+    'juego_racha',
+    'juego_racha_max',
+    'juego_penalizacion_segundos',
+    'juego_actualizado'
+  ];
+}
+
+function ensureChefGameColumns_(sheet) {
+  if (!sheet) throw new Error("Hoja Usuarios no encontrada.");
+
+  const cache = CacheService.getScriptCache();
+  const headers = getChefGameHeaders_();
+  const lastColumn = Math.max(sheet.getLastColumn(), 1);
+  let current = sheet.getRange(1, 1, 1, lastColumn).getValues()[0].map(String);
+  const existing = {};
+  current.forEach((header, index) => {
+    if (header) existing[header] = index + 1;
+  });
+
+  const missing = headers.filter(header => !existing[header]);
+  if (missing.length > 0) {
+    sheet.getRange(1, lastColumn + 1, 1, missing.length).setValues([missing]);
+    sheet.getRange(1, lastColumn + 1, 1, missing.length).setFontWeight('bold').setBackground('#f3f4f6');
+    current = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
+    cache.remove(CHEF_GAME_SCHEMA_CACHE_KEY);
+  }
+
+  const colMap = {};
+  current.forEach((header, index) => {
+    if (header) colMap[header] = index + 1;
+  });
+  cache.put(CHEF_GAME_SCHEMA_CACHE_KEY, '1', 3600);
+  return colMap;
+}
+
+function getChefGameCell_(row, colMap, key) {
+  const col = colMap[key];
+  return col ? row[col - 1] : '';
+}
+
+function parseChefGameNumber_(value, fallback) {
+  const parsed = Number(value);
+  if (!isFinite(parsed)) return fallback || 0;
+  return Math.max(0, Math.floor(parsed));
+}
+
+function getChefGameMonthKey_(date) {
+  return Utilities.formatDate(date || new Date(), Session.getScriptTimeZone(), 'yyyy-MM');
+}
+
+function normalizeChefGameMonthCell_(value) {
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    return getChefGameMonthKey_(value);
+  }
+
+  const raw = String(value || '').trim();
+  if (/^\d{4}-\d{2}$/.test(raw)) return raw;
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 7);
+
+  const parsed = new Date(raw);
+  if (!isNaN(parsed.getTime())) return getChefGameMonthKey_(parsed);
+  return raw;
+}
+
+function normalizeChefGameDayCell_(value) {
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    return Utilities.formatDate(value, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  }
+
+  const raw = String(value || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
+
+  const parsed = new Date(raw);
+  if (!isNaN(parsed.getTime())) return Utilities.formatDate(parsed, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  return raw;
+}
+
+function getChefGameMonthLabel_(date) {
+  const d = date || new Date();
+  const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+  return months[d.getMonth()] + ' ' + d.getFullYear();
+}
+
+function createDefaultChefGameState_(now) {
+  const current = now || new Date();
+  return {
+    monthKey: getChefGameMonthKey_(current),
+    monthLabel: getChefGameMonthLabel_(current),
+    dayKey: getTodayYmd_(),
+    score: 0,
+    hits: 0,
+    misses: 0,
+    usedSeconds: 0,
+    remainingSeconds: CHEF_GAME_DAILY_LIMIT_SECONDS,
+    dailyLimitSeconds: CHEF_GAME_DAILY_LIMIT_SECONDS,
+    streak: 0,
+    bestStreak: 0,
+    penaltySeconds: 0
+  };
+}
+
+function normalizeChefGameState_(row, colMap, now) {
+  const current = now || new Date();
+  const monthKey = getChefGameMonthKey_(current);
+  const dayKey = getTodayYmd_();
+  const rowMonth = normalizeChefGameMonthCell_(getChefGameCell_(row, colMap, 'juego_mes'));
+  const rowDay = normalizeChefGameDayCell_(getChefGameCell_(row, colMap, 'juego_tiempo_fecha'));
+  const sameMonth = rowMonth === monthKey;
+  const sameDay = rowDay === dayKey;
+  const usedSeconds = sameDay ? Math.min(CHEF_GAME_DAILY_LIMIT_SECONDS, parseChefGameNumber_(getChefGameCell_(row, colMap, 'juego_segundos_hoy'), 0)) : 0;
+  const score = sameMonth ? parseChefGameNumber_(getChefGameCell_(row, colMap, 'juego_puntos_mes'), 0) : 0;
+
+  return {
+    monthKey: monthKey,
+    monthLabel: getChefGameMonthLabel_(current),
+    dayKey: dayKey,
+    score: score,
+    hits: sameMonth ? parseChefGameNumber_(getChefGameCell_(row, colMap, 'juego_aciertos_mes'), 0) : 0,
+    misses: sameMonth ? parseChefGameNumber_(getChefGameCell_(row, colMap, 'juego_fallos_mes'), 0) : 0,
+    usedSeconds: usedSeconds,
+    remainingSeconds: Math.max(0, CHEF_GAME_DAILY_LIMIT_SECONDS - usedSeconds),
+    dailyLimitSeconds: CHEF_GAME_DAILY_LIMIT_SECONDS,
+    streak: sameDay ? parseChefGameNumber_(getChefGameCell_(row, colMap, 'juego_racha'), 0) : 0,
+    bestStreak: sameMonth ? parseChefGameNumber_(getChefGameCell_(row, colMap, 'juego_racha_max'), 0) : 0,
+    penaltySeconds: sameDay ? Math.min(30, parseChefGameNumber_(getChefGameCell_(row, colMap, 'juego_penalizacion_segundos'), 0)) : 0
+  };
+}
+
+function sanitizeChefGameSubmittedState_(submittedState, now, previousState) {
+  const current = now || new Date();
+  const state = submittedState && typeof submittedState === 'object' ? submittedState : {};
+  const previous = previousState && typeof previousState === 'object' ? previousState : createDefaultChefGameState_(current);
+  const usedSeconds = Math.min(CHEF_GAME_DAILY_LIMIT_SECONDS, Math.max(parseChefGameNumber_(previous.usedSeconds, 0), parseChefGameNumber_(state.usedSeconds, 0)));
+  const score = Math.min(999999, parseChefGameNumber_(state.score, parseChefGameNumber_(previous.score, 0)));
+  const hits = Math.min(99999, parseChefGameNumber_(state.hits, 0));
+  const misses = Math.min(99999, parseChefGameNumber_(state.misses, 0));
+  const streak = Math.min(9999, parseChefGameNumber_(state.streak, 0));
+  const bestStreak = Math.min(9999, Math.max(streak, parseChefGameNumber_(state.bestStreak, 0)));
+  const penaltySeconds = Math.min(30, parseChefGameNumber_(state.penaltySeconds, 0));
+
+  return {
+    monthKey: getChefGameMonthKey_(current),
+    monthLabel: getChefGameMonthLabel_(current),
+    dayKey: getTodayYmd_(),
+    score: score,
+    hits: hits,
+    misses: misses,
+    usedSeconds: usedSeconds,
+    remainingSeconds: Math.max(0, CHEF_GAME_DAILY_LIMIT_SECONDS - usedSeconds),
+    dailyLimitSeconds: CHEF_GAME_DAILY_LIMIT_SECONDS,
+    streak: streak,
+    bestStreak: bestStreak,
+    penaltySeconds: penaltySeconds
+  };
+}
+
+function getChefGameUserContext_(email, sheet, colMap, usersData) {
+  const targetEmail = String(email || '').toLowerCase();
+  const data = usersData || sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][0] || '').toLowerCase() === targetEmail) {
+      return {
+        rowIndex: i + 1,
+        row: data[i],
+        colMap: colMap
+      };
+    }
+  }
+  return null;
+}
+
+function getChefGameState_(email) {
+  try {
+    const sh = SpreadsheetApp.getActive().getSheetByName('Usuarios');
+    const colMap = ensureChefGameColumns_(sh);
+    const context = getChefGameUserContext_(email, sh, colMap);
+    if (!context) return createDefaultChefGameState_(new Date());
+    return normalizeChefGameState_(context.row, colMap, new Date());
+  } catch (e) {
+    return createDefaultChefGameState_(new Date());
+  }
+}
+
+function resolveChefGameTargetUser_(targetEmail, activeUser, usersData, deptMap) {
+  const requestedEmail = String(targetEmail || '').trim().toLowerCase();
+  if (!requestedEmail || requestedEmail === String(activeUser.email || '').toLowerCase()) return activeUser;
+
+  if (!['ADMIN_GEN', 'ADMIN_DEP'].includes(activeUser.rol)) {
+    throw new Error("No tienes permiso para registrar jugadas por otro usuario.");
+  }
+
+  const targetUser = getUserInfo_(requestedEmail, usersData, deptMap);
+  if (!targetUser || targetUser.estado !== 'ACTIVO') throw new Error("Usuario objetivo no encontrado o inactivo.");
+  if (activeUser.rol === 'ADMIN_DEP' && targetUser.departamentoId !== activeUser.departamentoId) {
+    throw new Error("No puedes registrar jugadas para otro departamento.");
+  }
+
+  return targetUser;
+}
+
+function normalizeChefGameEventType_(value) {
+  const type = String(value || '').trim().toUpperCase();
+  if (type === 'CHEF' || type === 'HIT_CHEF') return 'CHEF';
+  if (type === 'TRAP' || type === 'ONION' || type === 'PAN') return 'TRAP';
+  if (type === 'MISS') return 'MISS';
+  if (type === 'TICK') return 'TICK';
+  throw new Error("Tipo de jugada invalido.");
+}
+
+function normalizeChefGameElapsed_(payload) {
+  const raw = payload && payload.elapsedSeconds !== undefined ? Number(payload.elapsedSeconds) : 1;
+  if (!isFinite(raw) || raw < 0) return 1;
+  return Math.min(15, Math.ceil(raw));
+}
+
+function applyChefGameEvent_(state, eventType, payload, now) {
+  const remainingBefore = state.remainingSeconds;
+  const elapsedSeconds = Math.min(remainingBefore, normalizeChefGameElapsed_(payload));
+  state.usedSeconds = Math.min(CHEF_GAME_DAILY_LIMIT_SECONDS, state.usedSeconds + elapsedSeconds);
+  state.remainingSeconds = Math.max(0, CHEF_GAME_DAILY_LIMIT_SECONDS - state.usedSeconds);
+
+  const event = {
+    type: eventType,
+    delta: 0,
+    label: '',
+    combo: '',
+    elapsedSeconds: elapsedSeconds,
+    cooldownSeconds: 0,
+    capReached: state.remainingSeconds <= 0
+  };
+
+  if (remainingBefore <= 0) {
+    event.label = 'Tiempo agotado';
+    return event;
+  }
+
+  if (eventType === 'CHEF') {
+    state.streak += 1;
+    state.hits += 1;
+    state.bestStreak = Math.max(state.bestStreak, state.streak);
+    state.penaltySeconds = Math.max(0, state.penaltySeconds - 1);
+
+    event.delta = CHEF_GAME_SCORE_CHEF;
+    event.label = 'Chef atrapado';
+
+    if (state.streak === 3) {
+      event.delta += CHEF_GAME_SCORE_COMBO_3;
+      event.combo = '3 chefs seguidos';
+    } else if (state.streak === 5) {
+      event.delta += CHEF_GAME_SCORE_COMBO_5;
+      event.combo = '5 chefs seguidos';
+    } else if (state.streak > 0 && state.streak % 10 === 0) {
+      event.delta += CHEF_GAME_SCORE_PERFECT;
+      event.combo = 'Racha perfecta';
+    }
+  } else if (eventType === 'TRAP') {
+    const trapKind = String(payload && payload.kind || '').trim().toUpperCase();
+    const trapPenalty = trapKind === 'PAN' ? 10 : 5;
+    state.streak = 0;
+    state.misses += 1;
+    state.penaltySeconds = Math.min(30, state.penaltySeconds + trapPenalty);
+    event.delta = trapKind === 'PAN' ? CHEF_GAME_SCORE_PAN : CHEF_GAME_SCORE_ONION;
+    event.label = trapKind === 'PAN' ? 'Sarten quemado' : 'Cebolla podrida';
+    event.cooldownSeconds = state.penaltySeconds;
+  } else if (eventType === 'MISS') {
+    state.streak = 0;
+    state.misses += 1;
+    state.penaltySeconds = Math.min(15, state.penaltySeconds + 1);
+    event.delta = CHEF_GAME_SCORE_MISS;
+    event.label = 'Chef escapado';
+    event.cooldownSeconds = state.penaltySeconds;
+  } else {
+    event.label = 'Tiempo registrado';
+  }
+
+  if (event.delta < 0) state.score = Math.max(0, state.score + event.delta);
+  state.monthKey = getChefGameMonthKey_(now);
+  state.monthLabel = getChefGameMonthLabel_(now);
+  state.dayKey = getTodayYmd_();
+  return event;
+}
+
+function writeChefGameState_(sheet, rowIndex, colMap, state, now) {
+  const headers = getChefGameHeaders_();
+  const cols = headers.map(header => colMap[header]).filter(Boolean);
+  const minCol = Math.min.apply(null, cols);
+  const maxCol = Math.max.apply(null, cols);
+  const width = maxCol - minCol + 1;
+  const values = sheet.getRange(rowIndex, minCol, 1, width).getValues()[0];
+  const setValue = (key, value) => {
+    const col = colMap[key];
+    if (col) values[col - minCol] = value;
+  };
+
+  setValue('juego_mes', state.monthKey);
+  setValue('juego_puntos_mes', state.score);
+  setValue('juego_aciertos_mes', state.hits);
+  setValue('juego_fallos_mes', state.misses);
+  setValue('juego_tiempo_fecha', state.dayKey);
+  setValue('juego_segundos_hoy', state.usedSeconds);
+  setValue('juego_racha', state.streak);
+  setValue('juego_racha_max', state.bestStreak);
+  setValue('juego_penalizacion_segundos', state.penaltySeconds);
+  setValue('juego_actualizado', now || new Date());
+
+  if (colMap['juego_mes']) sheet.getRange(rowIndex, colMap['juego_mes']).setNumberFormat('@');
+  if (colMap['juego_tiempo_fecha']) sheet.getRange(rowIndex, colMap['juego_tiempo_fecha']).setNumberFormat('@');
+  sheet.getRange(rowIndex, minCol, 1, width).setValues([values]);
 }
 
 function isDateOpenForOrdering_(targetDateStr, holidaysSet) {

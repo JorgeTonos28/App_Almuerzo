@@ -255,4 +255,1046 @@
     border-color: transparent transparent #111827 transparent;
     transform: rotate(0deg);
   }
+
+  .chef-score-pill {
+    min-width: 4.75rem;
+    height: 2.25rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.45rem;
+    border-radius: 9999px;
+    border: 1px solid #fde68a;
+    background: #fffbeb;
+    color: #92400e;
+    font-size: 0.78rem;
+    font-weight: 900;
+    box-shadow: 0 10px 22px -18px rgba(146, 64, 14, 0.75);
+    transition: transform 0.18s ease, background-color 0.18s ease, border-color 0.18s ease;
+  }
+
+  .chef-score-pill:hover {
+    transform: translateY(-1px);
+    background: #fef3c7;
+    border-color: #fbbf24;
+  }
+
+  .chef-game-stage {
+    position: relative;
+    width: min(32rem, 100%);
+    min-height: 39rem;
+    margin-left: auto;
+    margin-right: auto;
+    padding: 3.35rem 1.8rem 3.8rem;
+    isolation: isolate;
+  }
+
+  .order-confirmation-card {
+    z-index: 3;
+  }
+
+  .chef-game-status {
+    position: absolute;
+    z-index: 5;
+    top: 0;
+    left: 50%;
+    width: min(28rem, calc(100% - 1.5rem));
+    min-height: 2.6rem;
+    transform: translateX(-50%);
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 0.75rem;
+    border: 1px solid rgba(251, 191, 36, 0.42);
+    background: rgba(255, 251, 235, 0.94);
+    color: #78350f;
+    border-radius: 1rem;
+    padding: 0.55rem 0.75rem;
+    box-shadow: 0 16px 34px -28px rgba(120, 53, 15, 0.75);
+    backdrop-filter: blur(10px);
+  }
+
+  .chef-game-status-label,
+  .chef-ranking-kicker {
+    display: block;
+    font-size: 0.6rem;
+    line-height: 0.7rem;
+    font-weight: 900;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #b45309;
+  }
+
+  .chef-game-status strong {
+    display: block;
+    font-size: 0.9rem;
+    line-height: 1rem;
+  }
+
+  .chef-game-progress {
+    height: 0.45rem;
+    overflow: hidden;
+    border-radius: 9999px;
+    background: rgba(251, 191, 36, 0.24);
+  }
+
+  .chef-game-progress span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, #22c55e, #f59e0b);
+    transition: width 0.25s ease;
+  }
+
+  .chef-game-streak {
+    white-space: nowrap;
+    border-radius: 9999px;
+    background: #ffffff;
+    color: #92400e;
+    padding: 0.32rem 0.55rem;
+    font-size: 0.66rem;
+    font-weight: 900;
+    border: 1px solid rgba(251, 191, 36, 0.38);
+  }
+
+  .chef-game-actions {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.38rem;
+    white-space: nowrap;
+  }
+
+  .chef-game-control {
+    width: 2rem;
+    height: 2rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 9999px;
+    color: #92400e;
+    background: #ffffff;
+    border: 1px solid rgba(251, 191, 36, 0.42);
+    font-size: 0.76rem;
+    transition: transform 0.16s ease, background-color 0.16s ease, color 0.16s ease;
+  }
+
+  .chef-game-control:hover:not(:disabled) {
+    transform: translateY(-1px);
+    background: #fef3c7;
+    color: #78350f;
+  }
+
+  .chef-game-control:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  .chef-game-control.is-dirty {
+    background: #f59e0b;
+    border-color: #d97706;
+    color: #ffffff;
+  }
+
+  .chef-game-target {
+    position: absolute;
+    z-index: 2;
+    width: 6rem;
+    height: 6rem;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    cursor: pointer;
+    touch-action: manipulation;
+    filter: drop-shadow(0 16px 18px rgba(15, 23, 42, 0.2));
+    animation: chefPeek 0.18s ease-out both;
+  }
+
+  .chef-game-target:active {
+    filter: drop-shadow(0 8px 10px rgba(15, 23, 42, 0.18));
+  }
+
+  .chef-game-target.is-bonus {
+    z-index: 4;
+    filter: drop-shadow(0 0 1rem rgba(250, 204, 21, 0.82)) drop-shadow(0 18px 20px rgba(146, 64, 14, 0.25));
+  }
+
+  .chef-game-target.is-bonus .chef-character::before {
+    content: '';
+    position: absolute;
+    z-index: -1;
+    inset: -0.65rem;
+    border-radius: 9999px;
+    background: radial-gradient(circle, rgba(254, 240, 138, 0.95) 0 34%, rgba(251, 191, 36, 0.42) 52%, rgba(251, 191, 36, 0) 72%);
+    animation: chefBonusGlow 0.75s ease-in-out infinite alternate;
+  }
+
+  .chef-game-target.is-bonus .chef-face {
+    border-color: #fef3c7;
+    box-shadow: inset 0 -0.35rem 0 rgba(180, 83, 9, 0.12), 0 0 0 0.2rem rgba(250, 204, 21, 0.38);
+  }
+
+  @keyframes chefBonusGlow {
+    from { opacity: 0.72; scale: 0.94; }
+    to { opacity: 1; scale: 1.08; }
+  }
+
+  .chef-pos-side-right-high {
+    top: 8.6rem;
+    left: calc(50% + 11.1rem);
+  }
+
+  .chef-pos-side-right-mid {
+    top: 16rem;
+    left: calc(50% + 11.1rem);
+  }
+
+  .chef-pos-side-right-low {
+    top: 24rem;
+    left: calc(50% + 11.1rem);
+  }
+
+  .chef-pos-side-left-high {
+    top: 8.6rem;
+    left: calc(50% - 17.1rem);
+  }
+
+  .chef-pos-side-left-mid {
+    top: 16rem;
+    left: calc(50% - 17.1rem);
+  }
+
+  .chef-pos-side-left-low {
+    top: 24rem;
+    left: calc(50% - 17.1rem);
+  }
+
+  @keyframes chefPeek {
+    from { opacity: 0; scale: 0.7; }
+    to { opacity: 1; scale: 1; }
+  }
+
+  .chef-character {
+    position: relative;
+    display: block;
+    width: 5.35rem;
+    height: 5.35rem;
+    margin: 0 auto;
+  }
+
+  .chef-bonus-star {
+    position: absolute;
+    z-index: 5;
+    left: 50%;
+    top: 48%;
+    color: #facc15;
+    font-size: 0.82rem;
+    text-shadow: 0 0 0.3rem rgba(251, 191, 36, 0.55);
+    pointer-events: none;
+    animation: chefStarPop 0.48s ease-out forwards;
+  }
+
+  @keyframes chefStarPop {
+    from {
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(0.55) rotate(0deg);
+    }
+    to {
+      opacity: 0;
+      transform: translate(calc(-50% + var(--star-x)), calc(-50% + var(--star-y))) scale(1.15) rotate(var(--star-rot));
+    }
+  }
+
+  .chef-face {
+    position: absolute;
+    left: 50%;
+    bottom: 0.3rem;
+    width: 4.1rem;
+    height: 4.1rem;
+    transform: translateX(-50%);
+    border-radius: 9999px;
+    background: #ffe1bd;
+    border: 0.2rem solid #ffffff;
+    box-shadow: inset 0 -0.35rem 0 rgba(180, 83, 9, 0.12);
+  }
+
+  .chef-hat {
+    position: absolute;
+    z-index: 2;
+    top: -0.35rem;
+    left: 50%;
+    width: 4.85rem;
+    height: 2.3rem;
+    transform: translateX(-50%);
+  }
+
+  .chef-hat::after {
+    content: '';
+    position: absolute;
+    left: 0.7rem;
+    right: 0.7rem;
+    bottom: 0.1rem;
+    height: 1rem;
+    border-radius: 0.35rem;
+    background: #ffffff;
+    border: 0.12rem solid #e5e7eb;
+  }
+
+  .chef-hat i {
+    position: absolute;
+    bottom: 0.65rem;
+    width: 1.65rem;
+    height: 1.65rem;
+    border-radius: 9999px;
+    background: #ffffff;
+    border: 0.12rem solid #e5e7eb;
+  }
+
+  .chef-hat i:nth-child(1) { left: 0.2rem; }
+  .chef-hat i:nth-child(2) { left: 1.55rem; bottom: 0.95rem; }
+  .chef-hat i:nth-child(3) { right: 0.2rem; }
+
+  .chef-eye {
+    position: absolute;
+    top: 1.65rem;
+    width: 0.34rem;
+    height: 0.52rem;
+    border-radius: 9999px;
+    background: #1f2937;
+  }
+
+  .chef-eye-left { left: 1.18rem; }
+  .chef-eye-right { right: 1.18rem; }
+
+  .chef-mustache {
+    position: absolute;
+    left: 50%;
+    top: 2.35rem;
+    width: 1.65rem;
+    height: 0.55rem;
+    transform: translateX(-50%);
+  }
+
+  .chef-mustache::before,
+  .chef-mustache::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    width: 0.92rem;
+    height: 0.52rem;
+    background: #78350f;
+    border-radius: 9999px 9999px 0.2rem 9999px;
+  }
+
+  .chef-mustache::before {
+    right: 50%;
+    transform: rotate(12deg);
+  }
+
+  .chef-mustache::after {
+    left: 50%;
+    transform: scaleX(-1) rotate(12deg);
+  }
+
+  .chef-onion {
+    position: relative;
+    display: block;
+    width: 4.7rem;
+    height: 4.9rem;
+    margin: 0 auto;
+    border-radius: 55% 55% 50% 50%;
+    background: radial-gradient(circle at 35% 28%, #f5d0fe 0 18%, #a855f7 42%, #6b21a8 100%);
+    border: 0.18rem solid #4c1d95;
+    transform: rotate(-9deg);
+  }
+
+  .chef-onion::before {
+    content: '';
+    position: absolute;
+    top: -0.75rem;
+    left: 1.8rem;
+    width: 1.1rem;
+    height: 1.1rem;
+    border-radius: 0 9999px 0 9999px;
+    background: #65a30d;
+    transform: rotate(-24deg);
+  }
+
+  .chef-onion::after {
+    content: '';
+    position: absolute;
+    top: 1.35rem;
+    left: 1.35rem;
+    width: 0.48rem;
+    height: 0.48rem;
+    border-radius: 9999px;
+    background: rgba(31, 41, 55, 0.75);
+    box-shadow: 1.28rem 0.42rem 0 rgba(31, 41, 55, 0.72), 0.68rem 1.25rem 0 rgba(132, 204, 22, 0.78);
+  }
+
+  .chef-onion i {
+    position: absolute;
+    right: -0.35rem;
+    bottom: 0.55rem;
+    width: 1.1rem;
+    height: 1.1rem;
+    border-radius: 9999px;
+    background: rgba(132, 204, 22, 0.82);
+    filter: blur(0.04rem);
+  }
+
+  .chef-pan {
+    position: relative;
+    display: block;
+    width: 5.3rem;
+    height: 3.8rem;
+    margin: 1.3rem auto 0;
+  }
+
+  .chef-pan::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: 3.85rem;
+    height: 2.7rem;
+    border-radius: 0 0 1.6rem 1.6rem;
+    background: linear-gradient(160deg, #111827, #374151);
+    border: 0.18rem solid #030712;
+  }
+
+  .chef-pan::after {
+    content: '';
+    position: absolute;
+    right: 0.15rem;
+    bottom: 1.15rem;
+    width: 2rem;
+    height: 0.42rem;
+    border-radius: 9999px;
+    background: #111827;
+    transform: rotate(-14deg);
+  }
+
+  .chef-pan i {
+    position: absolute;
+    left: 1.15rem;
+    top: 0.1rem;
+    width: 1rem;
+    height: 1.85rem;
+    border-radius: 9999px 9999px 0.3rem 0.3rem;
+    background: linear-gradient(#fef3c7, #f97316 50%, #7f1d1d);
+    box-shadow: 1rem 0.2rem 0 -0.18rem #ef4444, 1.7rem 0.45rem 0 -0.28rem #f59e0b;
+  }
+
+  .chef-cake-bonus {
+    position: absolute;
+    z-index: 2;
+    left: 50%;
+    top: 50%;
+    width: 4.2rem;
+    height: 4.2rem;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    cursor: pointer;
+    touch-action: manipulation;
+    filter: drop-shadow(0 14px 16px rgba(120, 53, 15, 0.25));
+    animation: chefCakeFly var(--cake-duration, 820ms) cubic-bezier(0.14, 0.82, 0.2, 1) forwards;
+  }
+
+  .chef-cake {
+    position: relative;
+    display: block;
+    width: 3.7rem;
+    height: 3.05rem;
+    margin: 0.5rem auto 0;
+    border-radius: 0.9rem 0.9rem 1.2rem 1.2rem;
+    background: linear-gradient(180deg, #fef3c7 0 20%, #f59e0b 21% 47%, #92400e 48% 100%);
+    border: 0.16rem solid #78350f;
+    overflow: visible;
+  }
+
+  .chef-cake::before {
+    content: '';
+    position: absolute;
+    left: 0.35rem;
+    right: 0.35rem;
+    top: -0.45rem;
+    height: 0.75rem;
+    border-radius: 9999px;
+    background: #fff7ed;
+    box-shadow: 0.45rem 0.2rem 0 -0.1rem #fef3c7, 1.3rem 0.05rem 0 -0.08rem #fff7ed, 2.05rem 0.18rem 0 -0.1rem #fef3c7;
+  }
+
+  .chef-cake::after {
+    content: '';
+    position: absolute;
+    inset: 0.85rem 0.35rem auto;
+    height: 0.28rem;
+    border-radius: 9999px;
+    background: rgba(255, 247, 237, 0.9);
+    box-shadow: 0 0.95rem 0 rgba(255, 247, 237, 0.82);
+  }
+
+  .chef-cake i,
+  .chef-cake b {
+    position: absolute;
+    top: -1.15rem;
+    width: 0.34rem;
+    height: 0.86rem;
+    border-radius: 9999px;
+    background: #facc15;
+  }
+
+  .chef-cake i {
+    left: 1.05rem;
+  }
+
+  .chef-cake b {
+    right: 1.05rem;
+  }
+
+  .chef-cake i::before,
+  .chef-cake b::before {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: -0.38rem;
+    width: 0.48rem;
+    height: 0.48rem;
+    transform: translateX(-50%);
+    border-radius: 9999px 9999px 9999px 0;
+    background: #fb7185;
+    rotate: -45deg;
+  }
+
+  @keyframes chefCakeFly {
+    0% {
+      opacity: 0;
+      transform: translate(-50%, -50%) translate(0, 0) scale(0.45) rotate(0deg);
+    }
+    10% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 0.96;
+      transform: translate(-50%, -50%) translate(var(--cake-x), var(--cake-y)) scale(1) rotate(var(--cake-rot));
+    }
+  }
+
+  .chef-game-countdown,
+  .chef-game-toast {
+    position: absolute;
+    z-index: 6;
+    left: 50%;
+    transform: translateX(-50%);
+    text-align: center;
+    pointer-events: none;
+  }
+
+  .chef-game-countdown {
+    top: 5.2rem;
+    min-width: 10rem;
+    border-radius: 9999px;
+    padding: 0.48rem 0.85rem;
+    color: #78350f;
+    background: #fef3c7;
+    border: 1px solid #fbbf24;
+    font-size: 0.72rem;
+    font-weight: 900;
+    box-shadow: 0 16px 28px -22px rgba(120, 53, 15, 0.9);
+  }
+
+  .chef-game-countdown span {
+    display: inline;
+    margin-left: 0.18rem;
+    font-size: 0.78rem;
+    color: #92400e;
+  }
+
+  .chef-game-toast {
+    top: 7.4rem;
+    max-width: min(22rem, calc(100% - 2rem));
+    border-radius: 9999px;
+    padding: 0.55rem 1rem;
+    background: #111827;
+    color: #ffffff;
+    font-size: 0.78rem;
+    font-weight: 900;
+    box-shadow: 0 18px 30px -22px rgba(15, 23, 42, 0.95);
+  }
+
+  .chef-game-toast-combo {
+    background: linear-gradient(90deg, #b45309, #dc2626);
+  }
+
+  .receipt-swap-enter-active,
+  .receipt-swap-leave-active {
+    transition: opacity 0.24s ease, transform 0.28s ease;
+  }
+
+  .receipt-swap-enter-from {
+    opacity: 0;
+    transform: translateX(1.2rem) scale(0.985);
+  }
+
+  .receipt-swap-leave-to {
+    opacity: 0;
+    transform: translateX(-1.2rem) scale(0.985);
+  }
+
+  .chef-ranking-view {
+    width: min(62rem, 100%);
+    margin: 0 auto;
+    display: grid;
+    gap: 1rem;
+  }
+
+  .chef-ranking-hero {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 1rem;
+    padding: 1.25rem;
+    border-radius: 1.25rem;
+    background: linear-gradient(135deg, #111827 0%, #1f2937 55%, #78350f 100%);
+    color: #ffffff;
+    box-shadow: 0 22px 42px -30px rgba(17, 24, 39, 0.9);
+  }
+
+  .chef-ranking-hero h2 {
+    margin: 0.15rem 0 0;
+    font-size: clamp(1.8rem, 5vw, 3rem);
+    line-height: 1;
+    font-weight: 950;
+    letter-spacing: 0;
+  }
+
+  .chef-ranking-hero p {
+    margin-top: 0.35rem;
+    color: rgba(255, 255, 255, 0.72);
+    font-size: 0.9rem;
+    font-weight: 700;
+  }
+
+  .chef-ranking-back {
+    width: 2.75rem;
+    height: 2.75rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 9999px;
+    background: rgba(255, 255, 255, 0.12);
+    color: #ffffff;
+    transition: background-color 0.18s ease, transform 0.18s ease;
+  }
+
+  .chef-ranking-back:hover {
+    background: rgba(255, 255, 255, 0.2);
+    transform: translateX(-1px);
+  }
+
+  .chef-ranking-score {
+    min-width: 8rem;
+    border-radius: 1rem;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    padding: 0.85rem 1rem;
+    text-align: right;
+  }
+
+  .chef-ranking-score span,
+  .chef-ranking-current span {
+    display: block;
+    color: rgba(255, 255, 255, 0.66);
+    font-size: 0.66rem;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .chef-ranking-score strong {
+    display: block;
+    font-size: 2rem;
+    line-height: 1;
+  }
+
+  .chef-ranking-current {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.75rem;
+  }
+
+  .chef-ranking-current > div {
+    border-radius: 1rem;
+    padding: 1rem;
+    background: #ffffff;
+    border: 1px solid #f3f4f6;
+    box-shadow: 0 16px 34px -30px rgba(15, 23, 42, 0.55);
+  }
+
+  .chef-ranking-current span {
+    color: #6b7280;
+  }
+
+  .chef-ranking-current strong {
+    display: block;
+    margin-top: 0.25rem;
+    color: #111827;
+    font-size: 1.55rem;
+    line-height: 1;
+    font-weight: 950;
+  }
+
+  .chef-ranking-rules-toggle {
+    width: 100%;
+    min-height: 3rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    border-radius: 1rem;
+    border: 1px solid #f3e8c8;
+    background: #ffffff;
+    color: #92400e;
+    padding: 0.85rem 1rem;
+    font-size: 0.84rem;
+    font-weight: 950;
+    box-shadow: 0 16px 30px -28px rgba(120, 53, 15, 0.55);
+    transition: border-color 0.18s ease, background-color 0.18s ease, transform 0.18s ease;
+  }
+
+  .chef-ranking-rules-toggle:hover {
+    border-color: #fbbf24;
+    background: #fffbeb;
+    transform: translateY(-1px);
+  }
+
+  .chef-ranking-rules-toggle span {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+  }
+
+  .chef-ranking-rules-toggle i {
+    color: #d97706;
+  }
+
+  .rules-panel-enter-active,
+  .rules-panel-leave-active {
+    transition: opacity 0.18s ease, transform 0.18s ease;
+  }
+
+  .rules-panel-enter-from,
+  .rules-panel-leave-to {
+    opacity: 0;
+    transform: translateY(-0.35rem);
+  }
+
+  .chef-ranking-rules {
+    border-radius: 1.25rem;
+    border: 1px solid #f3e8c8;
+    background: linear-gradient(180deg, #fffaf0 0%, #ffffff 100%);
+    padding: 1rem;
+    box-shadow: 0 18px 36px -34px rgba(120, 53, 15, 0.45);
+  }
+
+  .chef-ranking-rules-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+    gap: 1rem;
+    align-items: end;
+    margin-bottom: 0.9rem;
+  }
+
+  .chef-ranking-rules-head h3 {
+    margin: 0.2rem 0 0;
+    color: #111827;
+    font-size: 1.05rem;
+    line-height: 1.2;
+    font-weight: 950;
+  }
+
+  .chef-ranking-rules-head p {
+    margin: 0;
+    color: #6b7280;
+    font-size: 0.84rem;
+    font-weight: 700;
+    line-height: 1.45;
+  }
+
+  .chef-ranking-rules-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+  }
+
+  .chef-ranking-rule {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.85rem 0.9rem;
+    border-radius: 1rem;
+    background: #ffffff;
+    border: 1px solid #f5e7c3;
+  }
+
+  .chef-ranking-rule i {
+    width: 2.1rem;
+    height: 2.1rem;
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.85rem;
+    background: #fff3d6;
+    color: #d97706;
+    font-size: 0.95rem;
+  }
+
+  .chef-ranking-rule strong {
+    display: block;
+    color: #111827;
+    font-size: 0.88rem;
+    font-weight: 950;
+  }
+
+  .chef-ranking-rule p {
+    margin: 0.2rem 0 0;
+    color: #6b7280;
+    font-size: 0.8rem;
+    font-weight: 700;
+    line-height: 1.45;
+  }
+
+  .chef-ranking-board {
+    min-height: 18rem;
+    border-radius: 1.25rem;
+    background: #ffffff;
+    border: 1px solid #f3f4f6;
+    overflow: hidden;
+    box-shadow: 0 18px 42px -34px rgba(15, 23, 42, 0.6);
+  }
+
+  .chef-ranking-loading,
+  .chef-ranking-empty {
+    min-height: 18rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.8rem;
+    color: #6b7280;
+    font-size: 0.85rem;
+    font-weight: 800;
+    text-align: center;
+    padding: 2rem;
+  }
+
+  .chef-ranking-empty i {
+    font-size: 2rem;
+    color: #d97706;
+  }
+
+  .chef-ranking-empty button {
+    border-radius: 0.8rem;
+    background: #111827;
+    color: #ffffff;
+    padding: 0.65rem 1rem;
+    font-size: 0.78rem;
+    font-weight: 900;
+  }
+
+  .chef-ranking-table {
+    width: 100%;
+    min-width: 44rem;
+    border-collapse: collapse;
+    font-size: 0.86rem;
+  }
+
+  .chef-ranking-table thead {
+    background: #f9fafb;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 0.68rem;
+    font-weight: 900;
+  }
+
+  .chef-ranking-table th,
+  .chef-ranking-table td {
+    padding: 0.9rem 1rem;
+    text-align: left;
+    border-bottom: 1px solid #f3f4f6;
+    white-space: nowrap;
+  }
+
+  .chef-ranking-table tbody tr.is-current {
+    background: #fffbeb;
+  }
+
+  .chef-rank-number {
+    display: inline-flex;
+    min-width: 2.4rem;
+    justify-content: center;
+    border-radius: 9999px;
+    background: #f3f4f6;
+    color: #111827;
+    padding: 0.28rem 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 950;
+  }
+
+  .chef-ranking-table tr.is-current .chef-rank-number {
+    background: #f59e0b;
+    color: #ffffff;
+  }
+
+  .chef-ranking-user {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+  }
+
+  .chef-ranking-user span {
+    width: 2rem;
+    height: 2rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 9999px;
+    background: #111827;
+    color: #ffffff;
+    font-size: 0.78rem;
+    font-weight: 900;
+  }
+
+  .chef-game-ranking-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    border-radius: 9999px;
+    background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+    color: #92400e;
+    padding: 0.55rem 0.85rem;
+    font-size: 0.72rem;
+    font-weight: 950;
+    letter-spacing: 0.02em;
+    box-shadow: inset 0 0 0 1px rgba(217, 119, 6, 0.12);
+    transition: transform 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease;
+  }
+
+  .chef-game-ranking-link:hover {
+    transform: translateY(-1px);
+    box-shadow: inset 0 0 0 1px rgba(217, 119, 6, 0.18), 0 12px 20px -18px rgba(217, 119, 6, 0.65);
+  }
+
+  .chef-game-ranking-link i {
+    font-size: 0.8rem;
+  }
+
+  @media (max-width: 1024px) {
+    .chef-game-stage {
+      min-height: 38rem;
+      padding-left: 3.25rem;
+      padding-right: 3.25rem;
+    }
+
+    .chef-game-target {
+      width: 5.35rem;
+      height: 5.35rem;
+    }
+  }
+
+  @media (max-width: 720px) {
+    .chef-score-pill {
+      min-width: 3.4rem;
+      padding: 0 0.65rem;
+    }
+
+    .chef-score-pill span {
+      max-width: 3rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .chef-game-stage {
+      width: 100%;
+      min-height: 38.5rem;
+      padding: 3.8rem 1.25rem 3.2rem;
+      overflow: hidden;
+    }
+
+    .chef-game-status {
+      grid-template-columns: 1fr;
+      gap: 0.45rem;
+      align-items: stretch;
+    }
+
+    .chef-game-streak {
+      width: fit-content;
+    }
+
+    .chef-game-target {
+      width: 4.85rem;
+      height: 4.85rem;
+    }
+
+    .chef-pos-side-left-high,
+    .chef-pos-side-left-mid,
+    .chef-pos-side-left-low {
+      left: -1.45rem;
+    }
+
+    .chef-pos-side-right-high,
+    .chef-pos-side-right-mid,
+    .chef-pos-side-right-low {
+      left: auto;
+      right: -1.45rem;
+    }
+
+    .chef-pos-side-left-high,
+    .chef-pos-side-right-high {
+      top: 9.1rem;
+    }
+
+    .chef-pos-side-left-mid,
+    .chef-pos-side-right-mid {
+      top: 17rem;
+    }
+
+    .chef-pos-side-left-low,
+    .chef-pos-side-right-low {
+      top: 25rem;
+    }
+
+    .chef-game-countdown {
+      top: 7.7rem;
+    }
+
+    .chef-game-toast {
+      top: 10rem;
+    }
+
+    .chef-ranking-hero {
+      grid-template-columns: auto 1fr;
+    }
+
+    .chef-ranking-score {
+      grid-column: 1 / -1;
+      text-align: left;
+    }
+
+    .chef-ranking-current {
+      grid-template-columns: 1fr;
+    }
+
+    .chef-ranking-rules-head {
+      grid-template-columns: 1fr;
+    }
+
+    .chef-ranking-rules-grid {
+      grid-template-columns: 1fr;
+    }
+  }
 </style>
