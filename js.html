@@ -70,7 +70,9 @@ createApp({
       roundStartedAt: 0,
       roundDurationMs: 0,
       roundToken: 0,
-      startedForKey: ''
+      startedForKey: '',
+      recentKinds: [],
+      lastTrapKind: ''
     });
     const CHEF_BONUS_STREAK_INTERVAL = 8;
     const CHEF_BONUS_DURATION_MS = 3000;
@@ -671,7 +673,11 @@ createApp({
       chefGame.bonusMode = false;
       chefGame.starBursts = [];
       chefGame.syncing = false;
-      if (options.clearKey) chefGame.startedForKey = '';
+      if (options.clearKey) {
+        chefGame.startedForKey = '';
+        chefGame.recentKinds = [];
+        chefGame.lastTrapKind = '';
+      }
     };
 
     const pauseChefGame = () => {
@@ -686,6 +692,61 @@ createApp({
     };
 
     const clampNumber = (value, min, max) => Math.min(max, Math.max(min, value));
+
+    const countRecentChefKinds = (kind, limit = 4) => {
+      return chefGame.recentKinds.slice(-limit).filter(item => item === kind).length;
+    };
+
+    const pushRecentChefKind = (kind) => {
+      chefGame.recentKinds = [...chefGame.recentKinds.slice(-5), kind];
+      if (kind === 'onion' || kind === 'pan') chefGame.lastTrapKind = kind;
+    };
+
+    const pickWeightedChefKind = (weights) => {
+      const entries = Object.entries(weights).filter(([, weight]) => weight > 0);
+      const total = entries.reduce((sum, [, weight]) => sum + weight, 0);
+      let roll = Math.random() * total;
+      for (const [kind, weight] of entries) {
+        roll -= weight;
+        if (roll <= 0) return kind;
+      }
+      return 'chef';
+    };
+
+    const chooseChefRoundKind = (streak) => {
+      const recent = chefGame.recentKinds.slice(-4);
+      const chefsInFour = recent.filter(kind => kind === 'chef').length;
+      const trapsInFour = recent.filter(kind => kind === 'onion' || kind === 'pan').length;
+      const lastTwo = chefGame.recentKinds.slice(-2);
+      const lastThree = chefGame.recentKinds.slice(-3);
+
+      if (lastTwo.length === 2 && lastTwo.every(kind => kind === 'onion' || kind === 'pan')) return 'chef';
+      if (lastThree.length === 3 && lastThree.every(kind => kind === 'chef')) {
+        return Math.random() > 0.5 ? 'onion' : 'pan';
+      }
+
+      const trapPressure = clampNumber(0.26 + (streak * 0.006), 0.24, 0.34);
+      const trapWeight = trapPressure * 100;
+      const chefWeight = 100 - trapWeight;
+      const onionWeight = trapWeight * (chefGame.lastTrapKind === 'onion' ? 0.36 : 0.64);
+      const panWeight = trapWeight * (chefGame.lastTrapKind === 'pan' ? 0.36 : 0.64);
+      const weights = {
+        chef: chefWeight,
+        onion: onionWeight,
+        pan: panWeight
+      };
+
+      if (chefsInFour >= 3) weights.chef *= 0.38;
+      if (trapsInFour >= 2) {
+        weights.onion *= 0.48;
+        weights.pan *= 0.48;
+        weights.chef *= 1.35;
+      }
+      if (countRecentChefKinds('onion', 3) >= 2) weights.onion *= 0.2;
+      if (countRecentChefKinds('pan', 3) >= 2) weights.pan *= 0.2;
+
+      return pickWeightedChefKind(weights);
+    };
 
     const addChefBonusStars = () => {
       const burstId = Date.now() + Math.random();
@@ -789,6 +850,8 @@ createApp({
       if (!force && chefGame.active && chefGame.startedForKey === orderKey && hasLiveRound) return;
 
       chefGame.startedForKey = orderKey;
+      chefGame.recentKinds = [];
+      chefGame.lastTrapKind = '';
       chefGame.active = false;
 
       if (!chefGameAvailable.value) {
@@ -897,16 +960,13 @@ createApp({
       if (viewMode.value !== 'USER' || !chefGameCardVisible.value || !chefGame.active || !chefGameAvailable.value) return;
 
       const streak = Number(chefGameState.value?.streak || 0);
-      const trapChance = clampNumber(0.18 + (streak * 0.012), 0.18, 0.34);
-      const roll = Math.random();
       const positions = ['side-left-high', 'side-left-mid', 'side-left-low', 'side-right-high', 'side-right-mid', 'side-right-low'];
       const isBonusChef = chefGame.bonusPending && streak >= CHEF_BONUS_STREAK_INTERVAL;
-      const kind = isBonusChef ? 'chef' : (roll < trapChance
-        ? (Math.random() > 0.5 ? 'onion' : 'pan')
-        : 'chef');
+      const kind = isBonusChef ? 'chef' : chooseChefRoundKind(streak);
 
       chefGame.kind = kind;
       chefGame.trapKind = kind === 'chef' ? '' : kind.toUpperCase();
+      pushRecentChefKind(kind);
       chefGame.position = positions[Math.floor(Math.random() * positions.length)];
       chefGame.bonusMode = isBonusChef;
       chefGame.bonusPending = false;
@@ -1016,7 +1076,7 @@ createApp({
         event.delta = 0;
       }
 
-      if (event.delta < 0) current.score = Math.max(0, Number(current.score || 0) + event.delta);
+      if (event.delta !== 0) current.score = Math.max(0, Number(current.score || 0) + event.delta);
       chefGameState.value = current;
       markChefGameDirty();
       return event;
@@ -1649,11 +1709,12 @@ createApp({
 
        // 2. Parse Text
        const lines = text.split('\n').map(l => l.trimEnd()); // Keep tabs
+       const normalizeImportKey = value => String(value || '').trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
        const catMap = {
           'ARROCES': 'Arroces', 'GRANOS': 'Granos', 'CARNES': 'Carnes',
-          'VIVERES': 'Viveres', 'VÍVERES': 'Viveres', 'ENSALADAS': 'Ensaladas',
+          'VIVERES': 'Viveres', 'ENSALADAS': 'Ensaladas',
           'VEGETARIANA': 'Vegetariana', 'OPCION RAPIDA': 'Opcion_Rapida',
-          'OPCIÓN RÁPIDA': 'Opcion_Rapida', 'CALDOS': 'Caldo', 'CALDO': 'Caldo'
+          'CALDOS': 'Caldo', 'CALDO': 'Caldo'
        };
        const knownCats = Object.keys(catMap);
 
@@ -1665,8 +1726,8 @@ createApp({
           const cells = line.split('\t').map(c => c.trim());
 
           // Detect Category Header
-          const firstCellUpper = cells[0].toUpperCase();
-          const match = knownCats.find(k => k === firstCellUpper || (cells.length > 1 && cells[1].toUpperCase() === k));
+          const firstCellUpper = normalizeImportKey(cells[0]);
+          const match = knownCats.find(k => k === firstCellUpper || (cells.length > 1 && normalizeImportKey(cells[1]) === k));
 
           if(match) {
              currentCat = catMap[match];
@@ -1752,7 +1813,7 @@ createApp({
          })
          .withFailureHandler(err => {
             adminState.loading = false;
-            showModal(err.message || "Error importando el menÃº.", "Error");
+            showModal(err.message || "Error importando el menú.", "Error");
          })
          .apiSaveWeeklyMenu(data);
     };

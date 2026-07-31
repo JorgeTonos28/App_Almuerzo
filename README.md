@@ -11,7 +11,7 @@ Aplicacion web para gestionar pedidos de almuerzo institucional con Google Apps 
 - Avisos por correo cuando se carga menu nuevo, cuando un cambio de menu cancela pedidos afectados y cuando Calendario suspende un almuerzo.
 - Reporte diario consolidado con detalle por departamento y Excel general con hojas separadas.
 - Resumen del usuario con costo acumulado por almuerzos segun el precio vigente en cada fecha.
-- Mini juego posterior a la confirmacion del pedido, con puntaje mensual, limite diario de juego y ranking.
+- Mini juego "Mini chef" con puntaje mensual, ranking, cooldown diario y sincronizacion de progreso en la hoja `Usuarios`.
 
 ## Estructura base
 
@@ -57,6 +57,16 @@ Claves importantes en `Config`:
 - `SUMMARY_COST_HINT_EXPIRES_ON`
 - `CALDO_MULTI_HINT_LIMIT`
 - `CALDO_MULTI_HINT_EXPIRES_ON`
+- `juego_mes`
+- `juego_puntos_mes`
+- `juego_aciertos_mes`
+- `juego_fallos_mes`
+- `juego_tiempo_fecha`
+- `juego_segundos_hoy`
+- `juego_racha`
+- `juego_racha_max`
+- `juego_penalizacion_segundos`
+- `juego_actualizado`
 
 Notas sobre costo por comida:
 
@@ -73,25 +83,12 @@ Notas sobre hints:
 - Los hints visibles se renderizan dentro de su propia seccion para que desaparezcan naturalmente al hacer scroll o cambiar de modulo.
 - El hint de costo acumulado queda anclado al card de costo dentro del resumen semanal/diario.
 
-## Mini juego y ranking
+Notas sobre Mini chef:
 
-- Al confirmar un pedido, el card de confirmacion entra con transicion y el usuario decide cuando iniciar o pausar el mini juego desde el control del recibo.
-- Si no hay menu cargado, la app muestra un card de estado similar al recibo y tambien permite jugar Mini chef desde ahi.
-- El usuario suma 1 punto al tocar al chef y pierde puntos si deja escapar al chef, toca una cebolla podrida o toca un sarten quemado.
-- Si el chef se escapa, o si el usuario toca una trampa, se incrementa una penalizacion en segundos antes de la proxima aparicion. La UI muestra ese contador en una sola capsula.
-- Mientras corre esa espera de penalizacion, no se puede pausar el juego, cambiar de fecha ni abrir el ranking para saltarse el contador.
-- Si una cebolla podrida o un sarten quemado desaparece sin que el usuario lo toque, no hay penalizacion ni perdida de puntos.
-- Las rachas otorgan combos pequenos para 3 chefs seguidos, 5 chefs seguidos y rachas perfectas cada 10 aciertos seguidos.
-- Cada 8 chefs seguidos se prepara un chef bonus: el proximo chef aparece con brillo durante 3 segundos y cada toque suma 1 punto sin cortar el round.
-- De forma muy poco frecuente puede salir un bizcocho disparado desde detras del card; si el usuario logra tocarlo antes de que se escape, suma 20 puntos.
-- Cada usuario tiene 900 segundos (15 minutos) de juego por dia. El contador corre solo mientras el juego esta en play, se guarda en `Usuarios.juego_segundos_hoy` y se reinicia automaticamente al cambiar `juego_tiempo_fecha`.
-- La economia de puntos esta calibrada para que los puntajes altos dependan de precision sostenida: los premios son pequenos, el bizcocho es raro y las penalizaciones pesan mas que un acierto normal.
-- El puntaje mensual se guarda en `Usuarios.juego_puntos_mes` y se considera solo si `juego_mes` coincide con el mes actual (`YYYY-MM`). Al iniciar un mes nuevo, el ranking muestra puntaje 0 hasta que el usuario vuelva a jugar.
-- Las jugadas se calculan en cliente durante la sesion para evitar latencia. El usuario puede guardar puntos manualmente y la app tambien sincroniza al agotarse el tiempo diario.
-- El puntaje aparece en el header junto al nombre del usuario. Al hacer clic se abre una pantalla de ranking mensual con los usuarios activos.
-- Cuando se agota el tiempo diario, la tarjeta del mini juego muestra un acceso directo al ranking mensual para que el usuario pueda revisar su posicion sin volver a buscar el boton del header.
-- La pantalla de ranking mensual incluye un boton para desplegar las reglas del juego con un resumen visual de puntaje, trampas, limite diario y guardado.
-- No requiere servicios avanzados ni scopes OAuth nuevos.
+- El juego guarda progreso por usuario en las columnas `juego_*` de la hoja `Usuarios`.
+- `juego_mes` y `juego_tiempo_fecha` se usan para reiniciar puntaje y tiempo al cambiar de mes o de dia, respectivamente.
+- `setupSheetsAndConfig()` migra de forma segura las columnas faltantes de `Usuarios` sin romper datos existentes.
+- El ranking mensual se calcula desde la hoja `Usuarios` y queda disponible dentro de la interfaz principal.
 
 ## Endpoint JSON de menu por fecha
 
@@ -162,4 +159,5 @@ Detalles:
 ## Versionado
 
 - Todo cambio funcional debe incrementar `APP_VERSION` en `Code.js`.
+- Si cambias la logica del backend o cualquier archivo servido por `doGet()`, recuerda que hace falta un nuevo deployment de la web app.
 - Sigue tambien las reglas documentadas en `AGENTS.md`.

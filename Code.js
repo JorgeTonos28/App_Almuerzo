@@ -1,7 +1,7 @@
 /**
  * Code.gs - Backend V5 (Refactor & New Features)
  */
-const APP_VERSION = 'v7.25';
+const APP_VERSION = 'v7.29';
 const SPREADSHEET_RETRY_ATTEMPTS = 4;
 const SPREADSHEET_RETRY_DELAY_MS = 1500;
 const CHEF_GAME_DAILY_LIMIT_SECONDS = 15 * 60;
@@ -1754,10 +1754,6 @@ function apiSaveMenuItem(dateStr, cat, itemData) {
    const admin = getUserInfo_();
    if (!admin || admin.rol !== 'ADMIN_GEN') throw new Error("Denegado");
 
-   if (!isDateOpenForOrdering_(dateStr)) {
-      throw new Error("No puedes editar el menú de una fecha no hábil, pasada o cerrada.");
-   }
-
    const sh = SpreadsheetApp.getActive().getSheetByName('Menu');
    const data = sh.getDataRange().getValues();
    let rowIdx = -1;
@@ -1774,6 +1770,7 @@ function apiSaveMenuItem(dateStr, cat, itemData) {
    }
 
    const normalizedDate = formatDate_(new Date(dateStr + 'T12:00:00'));
+   assertDateAllowedForMenuManagement_(normalizedDate, "editar");
    const menuSnapshot = buildActiveMenuSnapshotByDate_(data, new Set([normalizedDate]));
    const hadActiveMenuBefore = !!(menuSnapshot[normalizedDate] && menuSnapshot[normalizedDate].items.length > 0);
    const id = rowIdx > 0 ? itemData.id : Utilities.getUuid();
@@ -1796,7 +1793,7 @@ function apiSaveMenuItem(dateStr, cat, itemData) {
    }
 
    let menuNotificationCount = 0;
-   if (!oldItem && !hadActiveMenuBefore && newItem && isFutureDateString_(normalizedDate)) {
+   if (!oldItem && !hadActiveMenuBefore && newItem && isFutureDateString_(normalizedDate) && isDateOpenForOrdering_(normalizedDate)) {
       menuNotificationCount = notifyUsersMenuAvailable_(normalizedDate, [newItem]);
    }
 
@@ -1818,9 +1815,7 @@ function apiDeleteMenuItem(id) {
    for(let i=1; i<data.length; i++) {
       if (String(data[i][0]) === String(id)) {
          const oldItem = getMenuItemSnapshotFromRow_(data[i]);
-         if (oldItem && !isDateOpenForOrdering_(oldItem.date)) {
-            throw new Error("No puedes eliminar platos de una fecha no hÃ¡bil, pasada o cerrada.");
-         }
+         if (oldItem) assertDateAllowedForMenuManagement_(oldItem.date, "eliminar platos de");
          sh.deleteRow(i+1);
          let affectedOrders = [];
          let cancellationEmails = 0;
@@ -1854,9 +1849,7 @@ function apiSaveWeeklyMenu(menuData) {
    const datesToUpdate = new Set();
    Object.keys(menuData).forEach(k => {
       const normalizedDate = formatDate_(new Date(k + 'T12:00:00'));
-      if (!isDateOpenForOrdering_(normalizedDate)) {
-         throw new Error("No puedes importar menÃº para fechas no hÃ¡biles, pasadas o cerradas.");
-      }
+      assertDateAllowedForMenuManagement_(normalizedDate, "importar");
       datesToUpdate.add(normalizedDate);
    });
 
@@ -1916,7 +1909,7 @@ function apiSaveWeeklyMenu(menuData) {
       const oldSnapshot = oldMenuByDate[dateStr] || createMenuDateSnapshot_();
       const newSnapshot = newMenuByDate[dateStr] || createMenuDateSnapshot_();
 
-      if (oldSnapshot.items.length === 0 && newSnapshot.items.length > 0 && isFutureDateString_(dateStr)) {
+      if (oldSnapshot.items.length === 0 && newSnapshot.items.length > 0 && isFutureDateString_(dateStr) && isDateOpenForOrdering_(dateStr)) {
          newMenuDaysForBulkEmail.push({ date: dateStr, items: newSnapshot.items });
          return;
       }
@@ -2391,7 +2384,7 @@ function applyChefGameEvent_(state, eventType, payload, now) {
     event.label = 'Tiempo registrado';
   }
 
-  if (event.delta < 0) state.score = Math.max(0, state.score + event.delta);
+  if (event.delta !== 0) state.score = Math.max(0, state.score + event.delta);
   state.monthKey = getChefGameMonthKey_(now);
   state.monthLabel = getChefGameMonthLabel_(now);
   state.dayKey = getTodayYmd_();
@@ -2476,6 +2469,31 @@ function isDateOpenForOrdering_(targetDateStr, holidaysSet) {
   if (zeroNow > zeroPrev) return false;
 
   return true;
+}
+
+function isDateAllowedForMenuManagement_(targetDateStr, holidaysSet) {
+  if (!holidaysSet) holidaysSet = getHolidaysSet_();
+  if (!targetDateStr) return false;
+
+  const targetDate = new Date(targetDateStr + 'T12:00:00');
+  if (isNaN(targetDate.getTime())) return false;
+
+  const now = new Date();
+  const zeroNow = new Date(now); zeroNow.setHours(0,0,0,0);
+  const zeroTarget = new Date(targetDate); zeroTarget.setHours(0,0,0,0);
+  if (zeroTarget <= zeroNow) return false;
+
+  const day = targetDate.getDay();
+  if (day === 0 || day === 6) return false;
+  if (holidaysSet.has(targetDateStr)) return false;
+
+  return true;
+}
+
+function assertDateAllowedForMenuManagement_(targetDateStr, actionLabel) {
+  if (!isDateAllowedForMenuManagement_(targetDateStr)) {
+    throw new Error("Solo puedes " + actionLabel + " menú para días laborables futuros.");
+  }
 }
 
 function backupOrdersToDrive_(dateStr) {
