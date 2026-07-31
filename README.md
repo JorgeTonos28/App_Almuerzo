@@ -6,7 +6,7 @@ Aplicacion web para gestionar pedidos de almuerzo institucional con Google Apps 
 
 - Pedidos de almuerzo por fecha con reglas de negocio para combinaciones de menu.
 - Roles de `USUARIO`, `ADMIN_DEP` y `ADMIN_GEN`.
-- Gestion de usuarios, departamentos, menu, dias libres y configuracion del sistema.
+- Gestion de usuarios, departamentos, menu, categorias de menu, dias libres y configuracion del sistema.
 - Recordatorios, cierre diario, respaldos en Drive y reportes por correo.
 - Avisos por correo cuando se carga menu nuevo, cuando un cambio de menu cancela pedidos afectados y cuando Calendario suspende un almuerzo.
 - Reporte diario consolidado con detalle por departamento y Excel general con hojas separadas.
@@ -21,6 +21,7 @@ La solucion usa estas hojas en la spreadsheet:
 - `Usuarios`
 - `Departamentos`
 - `Menu`
+- `CategoriasMenu`
 - `Pedidos`
 - `DiasLibres`
 
@@ -28,8 +29,10 @@ La solucion usa estas hojas en la spreadsheet:
 
 1. Abre el editor de Apps Script.
 2. Ejecuta `setupSheetsAndConfig()` desde `Setup.js`.
-3. Verifica que se hayan creado las hojas requeridas.
+3. Verifica que se hayan creado las hojas requeridas, incluida `CategoriasMenu`.
 4. Revisa `Config` y completa los valores operativos necesarios.
+
+Al ejecutar el setup en una instalacion existente se crea `CategoriasMenu` sin alterar los menus ni pedidos previos. La hoja queda precargada con las categorias historicas y `Frituritas`.
 
 ## Configuracion relevante
 
@@ -104,6 +107,11 @@ Detalles:
 
 ## Reglas operativas de menu
 
+- Las categorias del menu se administran desde `Administracion > Gestion de Menu > Configurar categorias`. Se pueden crear, renombrar, ordenar, activar o desactivar y definir alias alternativos para la importacion.
+- Cada categoria tiene una clave interna estable. Renombrarla o desactivarla no modifica pedidos ni filas de menu ya existentes.
+- Las categorias activas y sus alias definen las secciones donde se pueden agregar platos y los encabezados reconocidos durante la importacion semanal. El reconocimiento ignora mayusculas, acentos y separadores. `Caldo` se inicializa con el alias `Caldos` para mantener compatibilidad.
+- Una categoria inactiva no admite nuevos platos ni importaciones, pero conserva la visualizacion de menus y pedidos que ya la usaban.
+- Los reportes de cierre crean columnas para las categorias configuradas y tambien conservan cualquier categoria historica presente en los pedidos.
 - `Caldo` permite seleccionar mas de una opcion dentro de la misma categoria.
 - Los textos del menu se normalizan al guardar y al renderizar para evitar ALL CAPS.
 - Las validaciones criticas siguen ejecutandose en backend antes de guardar pedidos.

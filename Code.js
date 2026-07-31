@@ -1,7 +1,7 @@
 /**
  * Code.gs - Backend V5 (Refactor & New Features)
  */
-const APP_VERSION = 'v7.29';
+const APP_VERSION = 'v7.30';
 const SPREADSHEET_RETRY_ATTEMPTS = 4;
 const SPREADSHEET_RETRY_DELAY_MS = 1500;
 const CHEF_GAME_DAILY_LIMIT_SECONDS = 15 * 60;
@@ -13,6 +13,18 @@ const CHEF_GAME_SCORE_MISS = -2;
 const CHEF_GAME_SCORE_ONION = -4;
 const CHEF_GAME_SCORE_PAN = -6;
 const CHEF_GAME_SCHEMA_CACHE_KEY = 'CHEF_GAME_SCHEMA_READY_V1';
+const MENU_CATEGORIES_SHEET = 'CategoriasMenu';
+const DEFAULT_MENU_CATEGORIES = [
+  ['Arroces', 'Arroces', 10, 'ACTIVO', ''],
+  ['Granos', 'Granos', 20, 'ACTIVO', ''],
+  ['Carnes', 'Carnes', 30, 'ACTIVO', ''],
+  ['Ensaladas', 'Ensaladas', 40, 'ACTIVO', ''],
+  ['Viveres', 'Viveres', 50, 'ACTIVO', ''],
+  ['Vegetariana', 'Vegetariana', 60, 'ACTIVO', ''],
+  ['Caldo', 'Caldo', 70, 'ACTIVO', 'Caldos'],
+  ['Opcion_Rapida', 'Opcion Rapida', 80, 'ACTIVO', ''],
+  ['Frituritas', 'Frituritas', 90, 'ACTIVO', '']
+];
 
 // === RUTAS E INICIO ===
 
@@ -51,6 +63,81 @@ function doGet(e) {
 
 function include(filename) {
   return HtmlService.createHtmlOutputFromFile(filename).getContent();
+}
+
+function ensureMenuCategoriesSheet_() {
+  const ss = SpreadsheetApp.getActive();
+  let sheet = ss.getSheetByName(MENU_CATEGORIES_SHEET);
+  if (!sheet) {
+    sheet = ss.insertSheet(MENU_CATEGORIES_SHEET);
+    sheet.getRange(1, 1, 1, 5).setValues([['id', 'nombre', 'orden', 'estado', 'alias_importacion']]);
+    sheet.getRange(1, 1, 1, 5).setFontWeight('bold').setBackground('#f3f4f6');
+    sheet.setFrozenRows(1);
+  } else if (String(sheet.getRange(1, 5).getValue() || '').trim() !== 'alias_importacion') {
+    sheet.getRange(1, 5).setValue('alias_importacion').setFontWeight('bold').setBackground('#f3f4f6');
+  }
+  ensureDefaultMenuCategories_(sheet);
+  return sheet;
+}
+
+function ensureDefaultMenuCategories_(sheet) {
+  if (!sheet) return;
+  const existing = readSheetValues_(sheet, 5).slice(1);
+  const existingIds = {};
+  existing.forEach(row => { existingIds[String(row[0] || '').trim()] = true; });
+  const missing = DEFAULT_MENU_CATEGORIES.filter(category => !existingIds[category[0]]);
+  if (missing.length > 0) {
+    sheet.getRange(sheet.getLastRow() + 1, 1, missing.length, 5).setValues(missing);
+  }
+}
+
+function parseMenuCategoryAliases_(value) {
+  const values = Array.isArray(value) ? value : String(value || '').split(/[,;\n]/);
+  const seen = {};
+  return values.map(alias => String(alias || '').trim().replace(/\s+/g, ' ')).filter(alias => {
+    const key = normalizeCategoryLookupKey_(alias);
+    if (!key || seen[key]) return false;
+    seen[key] = true;
+    return true;
+  });
+}
+
+function getMenuCategories_(includeInactive) {
+  const cacheKey = ['MENU_CATEGORIES', getRevisionValue_('APP_MENU_CATEGORIES_REVISION'), includeInactive ? 'ALL' : 'ACTIVE'].join(':');
+  const cached = readJsonCache_(cacheKey);
+  if (cached) return cached;
+
+  const data = readSheetValues_(ensureMenuCategoriesSheet_(), 5);
+  const categories = data.slice(1)
+    .map(row => ({
+      id: String(row[0] || '').trim(),
+      nombre: normalizeMenuText_(row[1]),
+      orden: Number.isFinite(Number(row[2])) ? Number(row[2]) : 999,
+      estado: String(row[3] || '').trim().toUpperCase() === 'INACTIVO' ? 'INACTIVO' : 'ACTIVO',
+      aliases: parseMenuCategoryAliases_(row[4])
+    }))
+    .filter(category => category.id && category.nombre)
+    .filter(category => includeInactive || category.estado === 'ACTIVO')
+    .sort((a, b) => a.orden - b.orden || a.nombre.localeCompare(b.nombre, 'es'));
+
+  writeJsonCache_(cacheKey, categories, 300);
+  return categories;
+}
+
+function getMenuCategoryMap_() {
+  const map = {};
+  getMenuCategories_(true).forEach(category => { map[category.id] = category; });
+  return map;
+}
+
+function getMenuCategoryById_(categoryId) {
+  return getMenuCategoryMap_()[String(categoryId || '').trim()] || null;
+}
+
+function invalidateMenuCategoriesCache_() {
+  bumpRevisionValue_('APP_MENU_CATEGORIES_REVISION');
+  invalidateUserInitCache_();
+  invalidateMenuDataCache_();
 }
 
 function isMenuDayEndpointRequest_(params) {
@@ -291,7 +378,8 @@ function apiGetInitData(requestedDateStr, impersonateEmail) {
       hintConfig: hintConfig,
       todayYmd: todayYmd,
       chefGame: getChefGameState_(targetUser.email),
-      deptMap: deptMap
+      deptMap: deptMap,
+      menuCategories: getMenuCategories_(true)
     };
 
     writeJsonCache_(initCacheKey, response, 45);
@@ -1012,12 +1100,66 @@ function apiGetAdminData() {
        }
 
        data.holidays = getHolidaysList_();
+       data.menuCategories = getMenuCategories_(true);
     }
 
     data.departments = getDepartmentsList_(); // Returns {id, nombre...}
 
     writeJsonCache_(cacheKey, data, 45);
     return data;
+  } catch (e) {
+    return { ok: false, msg: e.message };
+  }
+}
+
+function apiSaveMenuCategory(categoryData) {
+  try {
+    const admin = getUserInfo_();
+    if (!admin || admin.rol !== 'ADMIN_GEN') throw new Error('Permiso denegado.');
+
+    const name = normalizeMenuText_(categoryData && categoryData.nombre);
+    const state = String(categoryData && categoryData.estado || 'ACTIVO').trim().toUpperCase();
+    const order = Number(categoryData && categoryData.orden);
+    if (!name) throw new Error('El nombre de la categoria es obligatorio.');
+    if (name.length > 80) throw new Error('El nombre de la categoria no puede superar 80 caracteres.');
+    if (!Number.isInteger(order) || order < 0 || order > 9999) throw new Error('El orden debe ser un numero entero entre 0 y 9999.');
+    if (state !== 'ACTIVO' && state !== 'INACTIVO') throw new Error('El estado de la categoria no es valido.');
+
+    const sheet = ensureMenuCategoriesSheet_();
+    const data = readSheetValues_(sheet, 5);
+    const id = String(categoryData && categoryData.id || '').trim();
+    const nameKey = normalizeCategoryLookupKey_(name);
+    const idKey = normalizeCategoryLookupKey_(id);
+    const aliases = parseMenuCategoryAliases_(categoryData && (categoryData.aliasesText !== undefined ? categoryData.aliasesText : categoryData.aliases))
+      .filter(alias => {
+        const key = normalizeCategoryLookupKey_(alias);
+        return key !== nameKey && (!idKey || key !== idKey);
+      });
+    if (aliases.length > 10 || aliases.some(alias => alias.length > 80)) {
+      throw new Error('Puedes definir hasta 10 alias de 80 caracteres cada uno.');
+    }
+    const candidateKeys = [name].concat(aliases).map(normalizeCategoryLookupKey_);
+    let rowIndex = 0;
+
+    for (let i = 1; i < data.length; i++) {
+      const currentId = String(data[i][0] || '').trim();
+      const currentName = normalizeMenuText_(data[i][1]);
+      if (currentId === id) rowIndex = i + 1;
+      if (currentId !== id) {
+        const currentKeys = [currentId, currentName].concat(parseMenuCategoryAliases_(data[i][4])).map(normalizeCategoryLookupKey_);
+        if (candidateKeys.some(key => currentKeys.indexOf(key) !== -1)) {
+          throw new Error('El nombre o uno de los alias ya pertenece a otra categoria.');
+        }
+      }
+    }
+
+    const savedId = rowIndex ? id : 'CAT_' + Utilities.getUuid();
+    const row = [savedId, name, order, state, aliases.join(', ')];
+    if (rowIndex) sheet.getRange(rowIndex, 1, 1, 5).setValues([row]);
+    else sheet.appendRow(row);
+
+    invalidateMenuCategoriesCache_();
+    return { ok: true, category: { id: savedId, nombre: name, orden: order, estado: state, aliases: aliases }, categories: getMenuCategories_(true) };
   } catch (e) {
     return { ok: false, msg: e.message };
   }
@@ -1524,7 +1666,7 @@ function groupAffectedOrdersByDate_(orders) {
 
 function buildMenuItemsHtml_(items) {
   const grouped = {};
-  const order = ['Arroces', 'Granos', 'Carnes', 'Viveres', 'Ensaladas', 'Vegetariana', 'Caldo', 'Opcion_Rapida'];
+  const categoryMap = getMenuCategoryMap_();
 
   (items || []).forEach(item => {
     if (!item || !item.cat || !item.plato) return;
@@ -1533,9 +1675,9 @@ function buildMenuItemsHtml_(items) {
   });
 
   const categories = Object.keys(grouped).sort((a, b) => {
-    const aIdx = order.indexOf(a);
-    const bIdx = order.indexOf(b);
-    return (aIdx === -1 ? 999 : aIdx) - (bIdx === -1 ? 999 : bIdx) || a.localeCompare(b, 'es');
+    const aCategory = categoryMap[a];
+    const bCategory = categoryMap[b];
+    return (aCategory ? aCategory.orden : 999) - (bCategory ? bCategory.orden : 999) || a.localeCompare(b, 'es');
   });
 
   if (categories.length === 0) return '';
@@ -1547,7 +1689,7 @@ function buildMenuItemsHtml_(items) {
     }).join('');
     return `
       <div style="margin: 16px 0;">
-        <p style="margin:0 0 6px;color:#1d4ed8;font-size:13px;font-weight:800;text-transform:uppercase;">${escapeHtml_(formatCatNameForEmail_(cat))}</p>
+        <p style="margin:0 0 6px;color:#1d4ed8;font-size:13px;font-weight:800;text-transform:uppercase;">${escapeHtml_((categoryMap[cat] && categoryMap[cat].nombre) || formatCatNameForEmail_(cat))}</p>
         <ul style="margin:0;padding-left:20px;">${rows}</ul>
       </div>
     `;
@@ -1769,6 +1911,12 @@ function apiSaveMenuItem(dateStr, cat, itemData) {
       }
    }
 
+   const category = getMenuCategoryById_(cat);
+   if (!category) throw new Error('La categoria seleccionada no existe.');
+   if (category.estado !== 'ACTIVO' && (!oldItem || oldItem.cat !== category.id)) {
+      throw new Error('No puedes agregar platos a una categoria inactiva.');
+   }
+
    const normalizedDate = formatDate_(new Date(dateStr + 'T12:00:00'));
    assertDateAllowedForMenuManagement_(normalizedDate, "editar");
    const menuSnapshot = buildActiveMenuSnapshotByDate_(data, new Set([normalizedDate]));
@@ -1776,8 +1924,8 @@ function apiSaveMenuItem(dateStr, cat, itemData) {
    const id = rowIdx > 0 ? itemData.id : Utilities.getUuid();
    // Save as Date object (local)
    const dateObj = new Date(normalizedDate + 'T12:00:00');
-   const row = [id, dateObj, cat, normalizeMenuText_(itemData.plato), normalizeMenuText_(itemData.desc), 'SI'];
-   const newItem = createMenuItemFromPayload_(normalizedDate, { cat: cat, plato: itemData.plato, desc: itemData.desc });
+   const row = [id, dateObj, category.id, normalizeMenuText_(itemData.plato), normalizeMenuText_(itemData.desc), 'SI'];
+   const newItem = createMenuItemFromPayload_(normalizedDate, { cat: category.id, plato: itemData.plato, desc: itemData.desc });
 
    if (rowIdx > 0) sh.getRange(rowIdx, 1, 1, row.length).setValues([row]);
    else sh.appendRow(row);
@@ -1844,12 +1992,19 @@ function apiSaveWeeklyMenu(menuData) {
    const ss = SpreadsheetApp.getActive();
    const sh = ss.getSheetByName('Menu');
    const data = sh.getDataRange().getValues();
+   const categoryMap = getMenuCategoryMap_();
 
    // Normalize keys to ensure matching
    const datesToUpdate = new Set();
    Object.keys(menuData).forEach(k => {
       const normalizedDate = formatDate_(new Date(k + 'T12:00:00'));
       assertDateAllowedForMenuManagement_(normalizedDate, "importar");
+      const items = Array.isArray(menuData[k]) ? menuData[k] : [];
+      items.forEach(item => {
+         const category = categoryMap[String(item && item.cat || '').trim()];
+         if (!category) throw new Error('La importacion incluye una categoria que no existe.');
+         if (category.estado !== 'ACTIVO') throw new Error('La importacion incluye una categoria inactiva: ' + category.nombre + '.');
+      });
       datesToUpdate.add(normalizedDate);
    });
 
@@ -2571,7 +2726,7 @@ function generateSecretToken_() {
 
 function getInitCacheKey_(activeEmail, targetEmail, requestedDateStr) {
   return [
-    'INIT',
+    'INIT_V2',
     getRevisionValue_('APP_INIT_REVISION'),
     String(activeEmail || '').toLowerCase(),
     String(targetEmail || '').toLowerCase(),
@@ -2581,7 +2736,7 @@ function getInitCacheKey_(activeEmail, targetEmail, requestedDateStr) {
 
 function getAdminCacheKey_(user) {
   return [
-    'ADMIN',
+    'ADMIN_V2',
     getRevisionValue_('APP_ADMIN_REVISION'),
     String(user.email || '').toLowerCase(),
     String(user.rol || ''),
@@ -2978,6 +3133,15 @@ function getMenuBundle_() {
   const bundle = { dates: dates, menusByDate: menusByDate };
   writeJsonCache_(cacheKey, bundle, 300);
   return bundle;
+}
+
+function normalizeCategoryLookupKey_(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .trim();
 }
 
 function createSingleDateMap_(dateStr, menu) {
@@ -3933,49 +4097,48 @@ function createAllDepartmentsReportFromTemplate_(dateStr, orders, byDept, deptSu
 function fillReportSheet_(sh, deptName, dateStr, orders, options) {
   const opts = options || {};
   const title = opts.preserveTitleCase ? String(deptName) : String(deptName).toUpperCase();
+  const reportCategories = getReportCategories_(orders);
+  const totalColumns = 5 + reportCategories.length;
+  const lastColumn = getSheetColumnLetter_(totalColumns);
 
   sh.setFrozenRows(0);
   sh.setFrozenColumns(0);
+  if (sh.getMaxColumns() < totalColumns) {
+    sh.insertColumnsAfter(sh.getMaxColumns(), totalColumns - sh.getMaxColumns());
+  }
+  sh.getRange(3, 1, 2, sh.getMaxColumns()).breakApart();
+  sh.getRange(5, 1, 1, sh.getMaxColumns()).breakApart();
 
-  // 1. Set Dept Name (A3:M4)
-  sh.getRange("A3:M4").merge().setValue(title)
+  // 1. Set Dept Name
+  sh.getRange('A3:' + lastColumn + '4').merge().setValue(title)
     .setHorizontalAlignment("center").setVerticalAlignment("middle");
 
-  // 2. Set Date (A5:M5) -> "PEDIDO ALMUERZO : 03/12/2025"
+  // 2. Set Date -> "PEDIDO ALMUERZO : 03/12/2025"
   const d = new Date(dateStr + 'T12:00:00');
   const fmtDate = Utilities.formatDate(d, Session.getScriptTimeZone(), 'dd/MM/yyyy');
-  sh.getRange("A5:M5").merge().setValue(`PEDIDO ALMUERZO : ${fmtDate}`)
+  sh.getRange('A5:' + lastColumn + '5').merge().setValue(`PEDIDO ALMUERZO : ${fmtDate}`)
     .setHorizontalAlignment("center").setVerticalAlignment("middle")
     .setFontWeight("bold");
 
-  // 3. Set Headers (A7:M7)
-  const headers = ['NO.', 'NOMBRE EMPLEADO', 'C\u00d3DIGO', 'DEPARTAMENTO', 'ARROCES', 'GRANOS', 'CARNES', 'VIVERES', 'ESPECIALIDADES', 'ENSALADAS', 'CALDO', 'OPCION RAPIDA', 'NOTA PARA LA COCINA'];
-  sh.getRange("A7:M7").setValues([headers])
+  // 3. Set Headers
+  const headers = ['NO.', 'NOMBRE EMPLEADO', 'C\u00d3DIGO', 'DEPARTAMENTO']
+    .concat(reportCategories.map(category => String(category.nombre || category.id).toUpperCase()))
+    .concat(['NOTA PARA LA COCINA']);
+  sh.getRange(7, 1, 1, totalColumns).setValues([headers])
     .setFontWeight("bold").setBorder(true, true, true, true, true, true);
 
   // 4. Populate Data
-  // Mapping categories to columns indices (relative to A, so 0-based index in values array)
-  // Headers: No(0), Nombre(1), Cod(2), Dept(3), Arroz(4), Granos(5), Carnes(6), Viveres(7), Esp(8), Ens(9), Caldo(10), OpRap(11), Nota(12)
-
-  const catMap = {
-     'Arroces': 4,
-     'Granos': 5,
-     'Carnes': 6,
-     'Viveres': 7,
-     'Vegetariana': 8, // Especialidades
-     'Ensaladas': 9,
-     'Caldo': 10,
-     'Opcion_Rapida': 11
-  };
+  const catMap = {};
+  reportCategories.forEach((category, index) => { catMap[category.id] = index + 4; });
 
   const rows = [];
   orders.forEach((o, i) => {
-     const row = new Array(13).fill('');
+     const row = new Array(totalColumns).fill('');
      row[0] = i + 1;
      row[1] = o.nombre;
      row[2] = o.codigo || '';
      row[3] = o.departamento;
-     row[12] = o.notaCocina || getOrderKitchenNote_(o.detail);
+     row[totalColumns - 1] = o.notaCocina || getOrderKitchenNote_(o.detail);
 
      const d = o.detail;
      if (d && d.categorias && d.items) {
@@ -3991,7 +4154,7 @@ function fillReportSheet_(sh, deptName, dateStr, orders, options) {
   });
 
   if (rows.length > 0) {
-     const range = sh.getRange(8, 1, rows.length, 13); // Start A8
+     const range = sh.getRange(8, 1, rows.length, totalColumns); // Start A8
      range.setValues(rows);
      range.setBorder(true, true, true, true, true, true);
      range.setHorizontalAlignment("center");
@@ -4000,11 +4163,43 @@ function fillReportSheet_(sh, deptName, dateStr, orders, options) {
      sh.getRange(8, 2, rows.length, 1).setHorizontalAlignment("left");
   }
 
-  applyReportSheetSizing_(sh, rows);
+  applyReportSheetSizing_(sh, rows, reportCategories);
 }
 
-function applyReportSheetSizing_(sh, rows) {
-  const widths = [42, 185, 78, 170, 120, 120, 145, 125, 155, 165, 145, 150, 220];
+function getReportCategories_(orders) {
+  const configured = getMenuCategories_(true);
+  const byId = {};
+  configured.forEach(category => { byId[category.id] = category; });
+  const categoryIds = configured.map(category => category.id);
+
+  (orders || []).forEach(order => {
+    const detail = order && order.detail;
+    (detail && Array.isArray(detail.categorias) ? detail.categorias : []).forEach(categoryId => {
+      const id = String(categoryId || '').trim();
+      if (!id || categoryIds.indexOf(id) !== -1) return;
+      categoryIds.push(id);
+      byId[id] = { id: id, nombre: formatCatNameForEmail_(id), orden: 999 };
+    });
+  });
+
+  return categoryIds.map(id => byId[id]);
+}
+
+function getSheetColumnLetter_(columnNumber) {
+  let result = '';
+  let number = columnNumber;
+  while (number > 0) {
+    const remainder = (number - 1) % 26;
+    result = String.fromCharCode(65 + remainder) + result;
+    number = Math.floor((number - 1) / 26);
+  }
+  return result;
+}
+
+function applyReportSheetSizing_(sh, rows, reportCategories) {
+  const widths = [42, 185, 78, 170]
+    .concat((reportCategories || []).map(() => 145))
+    .concat([220]);
   widths.forEach((width, idx) => sh.setColumnWidth(idx + 1, width));
   sh.setRowHeight(7, 26);
 

@@ -22,6 +22,7 @@ createApp({
     const dates = ref([]);       // Lista de fechas disponibles (tabs)
     const allMenus = ref({});
     const allOrders = ref({});
+    const menuCategories = ref([]);
     const remindersEnabled = ref(true);
     const showMultiDayBanner = ref(false);
     const bannerConfig = ref({ text: '', limit: 5 });
@@ -179,6 +180,7 @@ createApp({
        configList: [],
        configKeys: [],
        holidays: [],
+       menuCategories: [],
        userModal: { open: false, isNew: true, data: {} },
        deptModal: { open: false, isNew: true, data: {} },
        configEdit: false,
@@ -190,6 +192,8 @@ createApp({
        menuDate: '',
        menuItems: [],
        menuModal: { open: false, isNew: true, data: {} },
+       categoryManagerModal: { open: false },
+       categoryModal: { open: false, isNew: true, data: {} },
        // Menu Import
        menuImportModal: { open: false, step: 1, weekStart: '', text: '', preview: [], error: null },
        // Holiday Editor
@@ -293,17 +297,35 @@ createApp({
        });
     });
     
-    // Orden de categorías para mostrar (puedes ajustar el orden aquí)
-    const categoryOrder = ['Arroces', 'Granos', 'Carnes', 'Ensaladas', 'Viveres', 'Vegetariana', 'Caldo', 'Opcion_Rapida'];
+    // Categorías configuradas por el administrador, ordenadas por su prioridad.
+    const categoryById = computed(() => {
+      const map = {};
+      menuCategories.value.forEach(category => { map[category.id] = category; });
+      return map;
+    });
+
+    const sortCategoryIds = (ids) => {
+      return [...ids].sort((a, b) => {
+        const categoryA = categoryById.value[a];
+        const categoryB = categoryById.value[b];
+        const orderA = categoryA ? Number(categoryA.orden || 999) : 999;
+        const orderB = categoryB ? Number(categoryB.orden || 999) : 999;
+        const nameA = categoryA ? categoryA.nombre : a;
+        const nameB = categoryB ? categoryB.nombre : b;
+        return orderA - orderB || nameA.localeCompare(nameB, 'es');
+      });
+    };
+
+    const activeMenuCategories = computed(() => menuCategories.value.filter(category => category.estado === 'ACTIVO'));
+    const adminMenuCategories = computed(() => {
+      const ids = new Set(menuCategories.value.map(category => category.id));
+      adminState.menuItems.forEach(item => ids.add(item.cat));
+      return sortCategoryIds(ids).map(id => categoryById.value[id] || { id, nombre: String(id).replace(/_/g, ' '), orden: 999, estado: 'INACTIVO' });
+    });
     const categories = computed(() => {
       if (!menu.value) return [];
       const cats = Object.keys(menu.value);
-      // Ordenar según la lista predefinida, los que no estén van al final
-      return cats.sort((a, b) => {
-        const idxA = categoryOrder.indexOf(a);
-        const idxB = categoryOrder.indexOf(b);
-        return (idxA === -1 ? 999 : idxA) - (idxB === -1 ? 999 : idxB);
-      });
+      return sortCategoryIds(cats);
     });
     
     const selectedCount = computed(() => selection.size);
@@ -400,7 +422,14 @@ createApp({
     };
 
     // === SUMMARY TABLE HELPERS ===
-    const summaryHeaders = computed(() => categoryOrder);
+    const summaryHeaders = computed(() => {
+      const ids = new Set(menuCategories.value.map(category => category.id));
+      Object.values(allOrders.value).forEach(order => {
+        const categories = order && order.detalle && Array.isArray(order.detalle.categorias) ? order.detalle.categorias : [];
+        categories.forEach(category => ids.add(category));
+      });
+      return sortCategoryIds(ids);
+    });
 
     // Initial Default Range check
     const isDefaultSummary = computed(() => {
@@ -578,6 +607,8 @@ createApp({
       myOrder.value = res.myOrder || null;
       allMenus.value = res.allMenus || {};
       allOrders.value = res.allOrders || {};
+      menuCategories.value = res.menuCategories || menuCategories.value;
+      if (res.menuCategories) adminState.menuCategories = res.menuCategories;
       adminData.value = res.adminData || null;
       currentUserPrefs.value = res.userPrefs || {};
       remindersEnabled.value = res.userPrefs?.reminders !== false;
@@ -1397,6 +1428,8 @@ createApp({
                adminState.configList = res.configList || [];
                adminState.configKeys = res.configKeys || [];
                adminState.holidays = res.holidays || [];
+               adminState.menuCategories = res.menuCategories || [];
+               if (res.menuCategories) menuCategories.value = res.menuCategories;
 
                adminState.responsiblesList = normalizeResponsibleEmails(adminState.config['RESPONSIBLES_EMAILS_JSON']);
 
@@ -1620,7 +1653,7 @@ createApp({
          .apiGetMenuDay(adminState.menuDate);
     };
 
-    const openMenuModal = (item = null, cat = 'Arroces') => {
+    const openMenuModal = (item = null, cat = (activeMenuCategories.value[0] || {}).id) => {
        adminState.menuModal.isNew = !item;
        adminState.menuModal.data = item ? {...item} : { cat, plato: '', desc: '' };
        adminState.menuModal.open = true;
@@ -1662,6 +1695,37 @@ createApp({
              })
              .apiDeleteMenuItem(id);
        });
+    };
+
+    const openCategoryModal = (category = null) => {
+       adminState.categoryModal.isNew = !category;
+       adminState.categoryModal.data = category
+         ? { ...category, aliasesText: (category.aliases || []).join(', ') }
+         : { nombre: '', orden: (menuCategories.value.length + 1) * 10, estado: 'ACTIVO', aliasesText: '' };
+       adminState.categoryModal.open = true;
+    };
+
+    const openCategoryManager = () => {
+       adminState.categoryManagerModal.open = true;
+    };
+
+    const saveMenuCategory = () => {
+       const data = adminState.categoryModal.data;
+       if (!String(data.nombre || '').trim()) return showModal('El nombre de la categoria es obligatorio.', 'Categorias');
+       adminState.loading = true;
+       google.script.run
+         .withSuccessHandler(res => {
+            adminState.loading = false;
+            if (!res.ok) return showModal(res.msg || 'No se pudo guardar la categoria.', 'Error');
+            menuCategories.value = res.categories || menuCategories.value;
+            adminState.menuCategories = res.categories || adminState.menuCategories;
+            adminState.categoryModal.open = false;
+         })
+         .withFailureHandler(err => {
+            adminState.loading = false;
+            showModal(err.message || 'Error guardando la categoria.', 'Error');
+         })
+         .apiSaveMenuCategory(data);
     };
 
     // Menu Import Logic
@@ -1709,13 +1773,18 @@ createApp({
 
        // 2. Parse Text
        const lines = text.split('\n').map(l => l.trimEnd()); // Keep tabs
-       const normalizeImportKey = value => String(value || '').trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-       const catMap = {
-          'ARROCES': 'Arroces', 'GRANOS': 'Granos', 'CARNES': 'Carnes',
-          'VIVERES': 'Viveres', 'ENSALADAS': 'Ensaladas',
-          'VEGETARIANA': 'Vegetariana', 'OPCION RAPIDA': 'Opcion_Rapida',
-          'CALDOS': 'Caldo', 'CALDO': 'Caldo'
-       };
+       const normalizeCategoryLookupKey = (value) => String(value || '')
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .toUpperCase()
+          .replace(/[^A-Z0-9]+/g, ' ')
+          .trim();
+       const catMap = {};
+       activeMenuCategories.value.forEach(category => {
+          catMap[normalizeCategoryLookupKey(category.nombre)] = category.id;
+          catMap[normalizeCategoryLookupKey(category.id)] = category.id;
+          (category.aliases || []).forEach(alias => { catMap[normalizeCategoryLookupKey(alias)] = category.id; });
+       });
        const knownCats = Object.keys(catMap);
 
        let currentCat = null;
@@ -1726,8 +1795,9 @@ createApp({
           const cells = line.split('\t').map(c => c.trim());
 
           // Detect Category Header
-          const firstCellUpper = normalizeImportKey(cells[0]);
-          const match = knownCats.find(k => k === firstCellUpper || (cells.length > 1 && normalizeImportKey(cells[1]) === k));
+          const firstCellKey = normalizeCategoryLookupKey(cells[0]);
+          const secondCellKey = cells.length > 1 ? normalizeCategoryLookupKey(cells[1]) : '';
+          const match = knownCats.find(k => k === firstCellKey || k === secondCellKey);
 
           if(match) {
              currentCat = catMap[match];
@@ -2001,7 +2071,10 @@ createApp({
     };
 
     // UI Helpers
-    const formatCatName = (c) => c.replace(/_/g, ' ');
+    const formatCatName = (c) => {
+      const category = categoryById.value[c];
+      return category ? category.nombre : String(c || '').replace(/_/g, ' ');
+    };
     
     const hasSelectionInCat = (cat) => selectedCats.value.includes(cat);
     
@@ -2097,7 +2170,7 @@ createApp({
       chefGameState, chefGame, chefRanking,
       
       // Computed
-      isAdmin, isDeptAdmin, isAdminGen, isTestEmailMode, menuLoaded, categories,
+      isAdmin, isDeptAdmin, isAdminGen, isTestEmailMode, menuLoaded, categories, activeMenuCategories, adminMenuCategories,
       selectedCount, validationError, hasBlockingErrors, showGrainWarning,
       isDefaultSummary,
       displayDate, isCutoffPassed,
@@ -2123,7 +2196,7 @@ createApp({
       addDeptAdmin, removeDeptAdmin, deptAdminSearch, filteredAdminUsers, deptMoveHint,
 
       // Menu/Holiday
-      checkMenuDate, loadMenuDay, openMenuModal, saveMenuItem, deleteMenuItem,
+      checkMenuDate, loadMenuDay, openMenuModal, saveMenuItem, deleteMenuItem, openCategoryManager, openCategoryModal, saveMenuCategory,
       saveHoliday, deleteHoliday,
       openMenuImportModal, processMenuImport, saveWeeklyMenu,
       
