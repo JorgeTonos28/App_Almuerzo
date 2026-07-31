@@ -11,6 +11,7 @@ Aplicacion web para gestionar pedidos de almuerzo institucional con Google Apps 
 - Avisos por correo cuando se carga menu nuevo, cuando un cambio de menu cancela pedidos afectados y cuando Calendario suspende un almuerzo.
 - Reporte diario consolidado con detalle por departamento y Excel general con hojas separadas.
 - Resumen del usuario con costo acumulado por almuerzos segun el precio vigente en cada fecha.
+- Mini juego "Mini chef" con puntaje mensual, ranking, cooldown diario y sincronizacion de progreso en la hoja `Usuarios`.
 
 ## Estructura base
 
@@ -52,6 +53,16 @@ Claves importantes en `Config`:
 - `SUMMARY_COST_HINT_EXPIRES_ON`
 - `CALDO_MULTI_HINT_LIMIT`
 - `CALDO_MULTI_HINT_EXPIRES_ON`
+- `juego_mes`
+- `juego_puntos_mes`
+- `juego_aciertos_mes`
+- `juego_fallos_mes`
+- `juego_tiempo_fecha`
+- `juego_segundos_hoy`
+- `juego_racha`
+- `juego_racha_max`
+- `juego_penalizacion_segundos`
+- `juego_actualizado`
 
 Notas sobre costo por comida:
 
@@ -67,6 +78,13 @@ Notas sobre hints:
 - Los contadores de dismiss viven en `Usuarios.preferencias_json`, no en la hoja `Config`.
 - Los hints visibles se renderizan dentro de su propia seccion para que desaparezcan naturalmente al hacer scroll o cambiar de modulo.
 - El hint de costo acumulado queda anclado al card de costo dentro del resumen semanal/diario.
+
+Notas sobre Mini chef:
+
+- El juego guarda progreso por usuario en las columnas `juego_*` de la hoja `Usuarios`.
+- `juego_mes` y `juego_tiempo_fecha` se usan para reiniciar puntaje y tiempo al cambiar de mes o de dia, respectivamente.
+- `setupSheetsAndConfig()` migra de forma segura las columnas faltantes de `Usuarios` sin romper datos existentes.
+- El ranking mensual se calcula desde la hoja `Usuarios` y queda disponible dentro de la interfaz principal.
 
 ## Endpoint JSON de menu por fecha
 
@@ -136,4 +154,5 @@ Detalles:
 ## Versionado
 
 - Todo cambio funcional debe incrementar `APP_VERSION` en `Code.js`.
+- Si cambias la logica del backend o cualquier archivo servido por `doGet()`, recuerda que hace falta un nuevo deployment de la web app.
 - Sigue tambien las reglas documentadas en `AGENTS.md`.
