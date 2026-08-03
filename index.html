@@ -880,9 +880,14 @@
                      Editando menú para: <b>{{ adminState.menuDate }}</b>
                   </div>
                </div>
-               <button @click="openMenuImportModal" class="bg-green-600 hover:bg-green-700 text-white text-xs font-bold py-2 px-4 rounded-lg flex items-center gap-2 shadow-sm transition-colors">
-                  <i class="fa-solid fa-file-import"></i> Importar Menú Semanal
-               </button>
+               <div class="flex flex-wrap gap-2">
+                  <button @click="openCategoryManager" class="bg-white hover:bg-gray-50 text-gray-700 border border-gray-200 text-xs font-bold py-2 px-4 rounded-lg flex items-center gap-2 shadow-sm transition-colors">
+                     <i class="fa-solid fa-sliders"></i> Configurar categorías
+                  </button>
+                  <button @click="openMenuImportModal" class="bg-green-600 hover:bg-green-700 text-white text-xs font-bold py-2 px-4 rounded-lg flex items-center gap-2 shadow-sm transition-colors">
+                     <i class="fa-solid fa-file-import"></i> Importar Menú Semanal
+                  </button>
+               </div>
             </div>
 
             <div v-if="!adminState.menuDate" class="text-center py-10 text-gray-400 bg-gray-50 rounded-xl border border-dashed border-gray-200">
@@ -891,27 +896,28 @@
             </div>
 
             <div v-else class="space-y-6">
-               <div v-for="cat in categories" :key="cat" class="border border-gray-200 rounded-xl overflow-hidden">
+               <div v-for="category in adminMenuCategories" :key="category.id" class="border border-gray-200 rounded-xl overflow-hidden">
                   <div class="bg-gray-50 px-4 py-3 flex justify-between items-center">
                      <h3 class="font-bold text-sm text-gray-800 flex items-center gap-2">
-                        <i :class="getIconForCategory(cat)"></i> {{ formatCatName(cat) }}
+                        <i :class="getIconForCategory(category.id)"></i> {{ formatCatName(category.id) }}
                      </h3>
-                     <button @click="openMenuModal(null, cat)" class="text-blue-600 hover:bg-blue-100 p-1.5 rounded text-xs font-bold transition-colors">
+                     <span v-if="category.estado !== 'ACTIVO'" class="text-xs font-bold text-gray-400">Inactiva</span>
+                     <button v-else @click="openMenuModal(null, category.id)" class="text-blue-600 hover:bg-blue-100 p-1.5 rounded text-xs font-bold transition-colors">
                         <i class="fa-solid fa-plus"></i> Agregar
                      </button>
                   </div>
                   <div class="divide-y divide-gray-100">
-                     <div v-for="item in adminState.menuItems.filter(i => i.cat === cat)" :key="item.id" class="p-4 flex justify-between items-start hover:bg-gray-50/50 group">
+                     <div v-for="item in adminState.menuItems.filter(i => i.cat === category.id)" :key="item.id" class="p-4 flex justify-between items-start hover:bg-gray-50/50 group">
                         <div>
                            <div class="font-bold text-sm text-gray-900">{{ formatMenuText(item.plato) }}</div>
                            <div class="text-xs text-gray-500">{{ formatMenuText(item.desc) }}</div>
                         </div>
                         <div class="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                           <button @click="openMenuModal(item, cat)" class="text-gray-400 hover:text-blue-600"><i class="fa-solid fa-pen"></i></button>
+                           <button @click="openMenuModal(item, category.id)" class="text-gray-400 hover:text-blue-600"><i class="fa-solid fa-pen"></i></button>
                            <button @click="deleteMenuItem(item.id)" class="text-gray-400 hover:text-red-500"><i class="fa-solid fa-trash"></i></button>
                         </div>
                      </div>
-                     <div v-if="!adminState.menuItems.some(i => i.cat === cat)" class="p-4 text-xs text-gray-400 italic">
+                     <div v-if="!adminState.menuItems.some(i => i.cat === category.id)" class="p-4 text-xs text-gray-400 italic">
                         Sin opciones.
                      </div>
                   </div>
@@ -1061,6 +1067,84 @@
        </div>
     </div>
 
+    <!-- Menu Categories Manager -->
+    <div v-if="adminState.categoryManagerModal.open" class="fixed inset-0 z-[70] flex items-center justify-center p-4">
+       <div class="absolute inset-0 bg-gray-900/50 backdrop-blur-sm" @click="adminState.categoryManagerModal.open = false"></div>
+       <div class="bg-white rounded-2xl shadow-xl w-full max-w-2xl relative overflow-hidden animate-fade-in-up flex flex-col max-h-[90vh]">
+          <div class="px-5 sm:px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50 shrink-0">
+             <div>
+                <h3 class="font-bold text-lg text-gray-800">Categorías del menú</h3>
+                <p class="text-xs text-gray-500 mt-1">Controlan las secciones disponibles y los encabezados reconocidos al importar.</p>
+             </div>
+             <button @click="adminState.categoryManagerModal.open = false" class="text-gray-400 hover:text-gray-600"><i class="fa-solid fa-xmark"></i></button>
+          </div>
+          <div class="p-4 sm:p-6 overflow-y-auto grow">
+             <div class="flex justify-end mb-4">
+                <button @click="openCategoryModal()" class="bg-gray-900 hover:bg-black text-white text-xs font-bold py-2 px-4 rounded-lg flex items-center gap-2">
+                   <i class="fa-solid fa-plus"></i> Nueva categoría
+                </button>
+             </div>
+             <div class="overflow-x-auto border border-gray-200 rounded-xl">
+                <table class="w-full min-w-[560px] text-sm text-left">
+                   <thead class="bg-gray-50 text-gray-500 font-bold uppercase text-xs">
+                      <tr><th class="p-3">Categoría</th><th class="p-3">Orden</th><th class="p-3">Estado</th><th class="p-3 text-right">Acciones</th></tr>
+                   </thead>
+                   <tbody class="divide-y divide-gray-100">
+                      <tr v-for="category in adminState.menuCategories" :key="category.id" class="hover:bg-gray-50">
+                         <td class="p-3">
+                            <div class="font-semibold text-gray-900">{{ category.nombre }}</div>
+                            <div v-if="category.aliases && category.aliases.length" class="text-[11px] text-gray-400 mt-1">Alias: {{ category.aliases.join(', ') }}</div>
+                         </td>
+                         <td class="p-3 text-gray-500">{{ category.orden }}</td>
+                         <td class="p-3"><span :class="['px-2 py-1 rounded-full text-xs font-bold', category.estado === 'ACTIVO' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500']">{{ category.estado }}</span></td>
+                         <td class="p-3 text-right"><button @click="openCategoryModal(category)" class="text-blue-600 hover:bg-blue-50 p-2 rounded" title="Editar categoría"><i class="fa-solid fa-pen"></i></button></td>
+                      </tr>
+                      <tr v-if="adminState.menuCategories.length === 0"><td colspan="4" class="p-5 text-center text-gray-400">No hay categorías configuradas.</td></tr>
+                   </tbody>
+                </table>
+             </div>
+          </div>
+       </div>
+    </div>
+
+    <!-- Menu Category Editor -->
+    <div v-if="adminState.categoryModal.open" class="fixed inset-0 z-[80] flex items-center justify-center p-4">
+       <div class="absolute inset-0 bg-gray-900/50 backdrop-blur-sm" @click="adminState.categoryModal.open = false"></div>
+       <div class="bg-white rounded-2xl shadow-xl w-full max-w-md relative overflow-hidden animate-fade-in-up">
+          <div class="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+             <h3 class="font-bold text-lg text-gray-800">{{ adminState.categoryModal.isNew ? 'Nueva categoría' : 'Editar categoría' }}</h3>
+             <button @click="adminState.categoryModal.open = false" class="text-gray-400 hover:text-gray-600"><i class="fa-solid fa-xmark"></i></button>
+          </div>
+          <div class="p-6 space-y-4">
+             <p v-if="!adminState.categoryModal.isNew" class="text-xs text-gray-500 bg-blue-50 text-blue-700 rounded-lg p-3">Cambiar el nombre no modifica los menús ni pedidos ya registrados.</p>
+             <div>
+                <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Nombre visible</label>
+                <input v-model="adminState.categoryModal.data.nombre" type="text" maxlength="80" class="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+             </div>
+             <div>
+                <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Orden</label>
+                <input v-model.number="adminState.categoryModal.data.orden" type="number" min="0" max="9999" class="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+             </div>
+             <div>
+                <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Alias de importación</label>
+                <input v-model="adminState.categoryModal.data.aliasesText" type="text" maxlength="400" placeholder="Ej. Caldos, Sopas" class="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                <p class="text-[11px] text-gray-400 mt-1">Opcional. Separa varios encabezados alternativos con comas.</p>
+             </div>
+             <div>
+                <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Estado</label>
+                <select v-model="adminState.categoryModal.data.estado" class="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                   <option value="ACTIVO">ACTIVO</option>
+                   <option value="INACTIVO">INACTIVO</option>
+                </select>
+             </div>
+          </div>
+          <div class="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3">
+             <button @click="adminState.categoryModal.open = false" class="px-4 py-2 rounded-lg text-sm font-bold text-gray-500 hover:bg-gray-200" :disabled="adminState.loading">Cancelar</button>
+             <button @click="saveMenuCategory" class="px-4 py-2 rounded-lg text-sm font-bold bg-gray-900 text-white hover:bg-black disabled:opacity-50 flex items-center gap-2" :disabled="adminState.loading"><i v-if="adminState.loading" class="fa-solid fa-circle-notch fa-spin"></i> Guardar</button>
+          </div>
+       </div>
+    </div>
+
     <!-- Menu Modal (New) -->
     <div v-if="adminState.menuModal.open" class="fixed inset-0 z-[70] flex items-center justify-center p-4">
        <div class="absolute inset-0 bg-gray-900/50 backdrop-blur-sm" @click="adminState.menuModal.open = false"></div>
@@ -1072,9 +1156,7 @@
           <div class="p-6 space-y-4">
              <div>
                 <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Categoría</label>
-                <select v-model="adminState.menuModal.data.cat" disabled class="w-full bg-gray-100 border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none opacity-70 cursor-not-allowed">
-                   <option v-for="c in categories" :key="c" :value="c">{{ formatCatName(c) }}</option>
-                </select>
+                <input :value="formatCatName(adminState.menuModal.data.cat)" disabled class="w-full bg-gray-100 border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none opacity-70 cursor-not-allowed">
              </div>
              <div>
                 <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Nombre del Plato</label>

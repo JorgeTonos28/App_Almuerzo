@@ -34,7 +34,10 @@ function setupSheetsAndConfig(){
     {
       name: 'Menu', 
       headers: ['id', 'fecha', 'categoria', 'plato', 'descripcion', 'habilitado']
-      // Categorías: Arroces, Granos, Carnes, Viveres, Ensaladas, Vegetariana, Caldo, Opcion_Rapida
+    },
+    {
+      name: 'CategoriasMenu',
+      headers: ['id', 'nombre', 'orden', 'estado', 'alias_importacion']
     },
     {
       name: 'Pedidos', 
@@ -72,6 +75,7 @@ function setupSheetsAndConfig(){
   });
 
   populateDefaultConfig_(ss.getSheetByName('Config'));
+  ensureDefaultMenuCategories_(ss.getSheetByName('CategoriasMenu'));
   ensureMenuDayEndpointToken_(ss.getSheetByName('Config'));
   ensureBackupFolder_(ss.getSheetByName('Config'));
   populateSampleData_(ss); // Datos de prueba para que arranques rápido
