@@ -25,6 +25,8 @@ La solucion usa estas hojas en la spreadsheet:
 - `Pedidos`
 - `DiasLibres`
 
+La hoja `Usuarios` conserva sus primeras columnas historicas (`email`, `nombre`, `departamento`, `rol`, `estado`, `preferencias_json`, `codigo`) y agrega al final las columnas del mini juego: `juego_mes`, `juego_puntos_mes`, `juego_aciertos_mes`, `juego_fallos_mes`, `juego_tiempo_fecha`, `juego_segundos_hoy`, `juego_racha`, `juego_racha_max`, `juego_penalizacion_segundos` y `juego_actualizado`.
+
 ## Setup inicial
 
 1. Abre el editor de Apps Script.
@@ -33,6 +35,7 @@ La solucion usa estas hojas en la spreadsheet:
 4. Revisa `Config` y completa los valores operativos necesarios.
 
 Al ejecutar el setup en una instalacion existente se crea `CategoriasMenu` sin alterar los menus ni pedidos previos. La hoja queda precargada con las categorias historicas y `Frituritas`.
+Si ya existe la hoja `Usuarios`, `setupSheetsAndConfig()` agrega solo las columnas faltantes del mini juego al final de la hoja y conserva los datos existentes.
 
 ## Configuracion relevante
 
@@ -139,6 +142,7 @@ Detalles:
 - La app embebe el bootstrap inicial (`apiGetInitData`) directamente desde `doGet()`, evitando una llamada extra `google.script.run` al abrir la app por primera vez.
 - Ese bootstrap precarga en una sola respuesta todos los menus abiertos del modulo principal, para que luego el cambio entre dias ocurra sin esperas ni recargas adicionales.
 - Al confirmar o cancelar, la UI actualiza el estado local del pedido y solo refresca lo estrictamente necesario.
+- El mini juego acumula puntaje y tiempo en cliente durante la sesion y sincroniza en lote las columnas de juego del usuario, sin disparar un re-bootstrap global.
 - La navegacion entre fechas reutiliza `allMenus` y `allOrders` ya cargados; el endpoint puntual por fecha queda como soporte y no como camino normal de navegacion.
 - El bootstrap inicial y el panel administrativo usan cache corta en servidor con invalidacion por revision para reducir latencia repetida.
 - El calculo de fechas abiertas y menus disponibles usa cache corta independiente para no reconstruir el bundle completo en cada request.
