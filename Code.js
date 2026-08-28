@@ -1,7 +1,7 @@
 /**
  * Code.gs - Backend V5 (Refactor & New Features)
  */
-const APP_VERSION = 'v7.30';
+const APP_VERSION = 'v7.31';
 const SPREADSHEET_RETRY_ATTEMPTS = 4;
 const SPREADSHEET_RETRY_DELAY_MS = 1500;
 const CHEF_GAME_DAILY_LIMIT_SECONDS = 15 * 60;
@@ -15,15 +15,15 @@ const CHEF_GAME_SCORE_PAN = -6;
 const CHEF_GAME_SCHEMA_CACHE_KEY = 'CHEF_GAME_SCHEMA_READY_V1';
 const MENU_CATEGORIES_SHEET = 'CategoriasMenu';
 const DEFAULT_MENU_CATEGORIES = [
-  ['Arroces', 'Arroces', 10, 'ACTIVO', ''],
-  ['Granos', 'Granos', 20, 'ACTIVO', ''],
-  ['Carnes', 'Carnes', 30, 'ACTIVO', ''],
-  ['Ensaladas', 'Ensaladas', 40, 'ACTIVO', ''],
-  ['Viveres', 'Viveres', 50, 'ACTIVO', ''],
-  ['Vegetariana', 'Vegetariana', 60, 'ACTIVO', ''],
-  ['Caldo', 'Caldo', 70, 'ACTIVO', 'Caldos'],
-  ['Opcion_Rapida', 'Opcion Rapida', 80, 'ACTIVO', ''],
-  ['Frituritas', 'Frituritas', 90, 'ACTIVO', '']
+  ['Arroces', 'Arroces', 10, 'ACTIVO', '', 'SI', '', 'UNICA'],
+  ['Granos', 'Granos', 20, 'ACTIVO', '', 'SI', '', 'UNICA'],
+  ['Carnes', 'Carnes', 30, 'ACTIVO', '', 'SI', '', 'UNICA'],
+  ['Ensaladas', 'Ensaladas', 40, 'ACTIVO', '', 'SI', '', 'UNICA'],
+  ['Viveres', 'Viveres', 50, 'ACTIVO', '', 'SI', '', 'UNICA'],
+  ['Vegetariana', 'Vegetariana', 60, 'ACTIVO', '', 'NO', '', 'MULTIPLE'],
+  ['Caldo', 'Caldo', 70, 'ACTIVO', 'Caldos', 'NO', '', 'MULTIPLE'],
+  ['Opcion_Rapida', 'Opcion Rapida', 80, 'ACTIVO', '', 'NO', '', 'MULTIPLE'],
+  ['Frituritas', 'Frituritas', 90, 'ACTIVO', '', 'SI', '', 'UNICA']
 ];
 
 // === RUTAS E INICIO ===
@@ -68,13 +68,14 @@ function include(filename) {
 function ensureMenuCategoriesSheet_() {
   const ss = SpreadsheetApp.getActive();
   let sheet = ss.getSheetByName(MENU_CATEGORIES_SHEET);
+  const expectedHeaders = ['id', 'nombre', 'orden', 'estado', 'alias_importacion', 'es_combinable', 'combinable_con', 'tipo_seleccion'];
   if (!sheet) {
     sheet = ss.insertSheet(MENU_CATEGORIES_SHEET);
-    sheet.getRange(1, 1, 1, 5).setValues([['id', 'nombre', 'orden', 'estado', 'alias_importacion']]);
-    sheet.getRange(1, 1, 1, 5).setFontWeight('bold').setBackground('#f3f4f6');
+    sheet.getRange(1, 1, 1, expectedHeaders.length).setValues([expectedHeaders]);
+    sheet.getRange(1, 1, 1, expectedHeaders.length).setFontWeight('bold').setBackground('#f3f4f6');
     sheet.setFrozenRows(1);
-  } else if (String(sheet.getRange(1, 5).getValue() || '').trim() !== 'alias_importacion') {
-    sheet.getRange(1, 5).setValue('alias_importacion').setFontWeight('bold').setBackground('#f3f4f6');
+  } else {
+    ensureSheetHeaders_(sheet, expectedHeaders);
   }
   ensureDefaultMenuCategories_(sheet);
   return sheet;
@@ -82,12 +83,12 @@ function ensureMenuCategoriesSheet_() {
 
 function ensureDefaultMenuCategories_(sheet) {
   if (!sheet) return;
-  const existing = readSheetValues_(sheet, 5).slice(1);
+  const existing = readSheetValues_(sheet, 8).slice(1);
   const existingIds = {};
   existing.forEach(row => { existingIds[String(row[0] || '').trim()] = true; });
   const missing = DEFAULT_MENU_CATEGORIES.filter(category => !existingIds[category[0]]);
   if (missing.length > 0) {
-    sheet.getRange(sheet.getLastRow() + 1, 1, missing.length, 5).setValues(missing);
+    sheet.getRange(sheet.getLastRow() + 1, 1, missing.length, 8).setValues(missing);
   }
 }
 
@@ -102,20 +103,45 @@ function parseMenuCategoryAliases_(value) {
   });
 }
 
+function parseCategoryCombinableWith_(value) {
+  if (!value) return [];
+  const values = Array.isArray(value) ? value : String(value || '').split(/[,;\n]/);
+  const seen = {};
+  return values.map(item => String(item || '').trim()).filter(item => {
+    if (!item || seen[item]) return false;
+    seen[item] = true;
+    return true;
+  });
+}
+
 function getMenuCategories_(includeInactive) {
   const cacheKey = ['MENU_CATEGORIES', getRevisionValue_('APP_MENU_CATEGORIES_REVISION'), includeInactive ? 'ALL' : 'ACTIVE'].join(':');
   const cached = readJsonCache_(cacheKey);
   if (cached) return cached;
 
-  const data = readSheetValues_(ensureMenuCategoriesSheet_(), 5);
+  const data = readSheetValues_(ensureMenuCategoriesSheet_(), 8);
+  const specialDefaultNonCombinable = ['Vegetariana', 'Caldo', 'Opcion_Rapida'];
+  const specialDefaultMulti = ['Vegetariana', 'Caldo', 'Opcion_Rapida'];
+
   const categories = data.slice(1)
-    .map(row => ({
-      id: String(row[0] || '').trim(),
-      nombre: normalizeMenuText_(row[1]),
-      orden: Number.isFinite(Number(row[2])) ? Number(row[2]) : 999,
-      estado: String(row[3] || '').trim().toUpperCase() === 'INACTIVO' ? 'INACTIVO' : 'ACTIVO',
-      aliases: parseMenuCategoryAliases_(row[4])
-    }))
+    .map(row => {
+      const id = String(row[0] || '').trim();
+      const rawCombinable = String(row[5] || '').trim().toUpperCase();
+      const rawTipo = String(row[7] || '').trim().toUpperCase();
+      const esCombinable = rawCombinable ? rawCombinable !== 'NO' : !specialDefaultNonCombinable.includes(id);
+      const tipoSeleccion = rawTipo ? (rawTipo === 'MULTIPLE' ? 'MULTIPLE' : 'UNICA') : (specialDefaultMulti.includes(id) ? 'MULTIPLE' : 'UNICA');
+
+      return {
+        id: id,
+        nombre: normalizeMenuText_(row[1]),
+        orden: Number.isFinite(Number(row[2])) ? Number(row[2]) : 999,
+        estado: String(row[3] || '').trim().toUpperCase() === 'INACTIVO' ? 'INACTIVO' : 'ACTIVO',
+        aliases: parseMenuCategoryAliases_(row[4]),
+        es_combinable: esCombinable,
+        combinable_con: parseCategoryCombinableWith_(row[6]),
+        tipo_seleccion: tipoSeleccion
+      };
+    })
     .filter(category => category.id && category.nombre)
     .filter(category => includeInactive || category.estado === 'ACTIVO')
     .sort((a, b) => a.orden - b.orden || a.nombre.localeCompare(b.nombre, 'es'));
@@ -348,14 +374,14 @@ function apiGetInitData(requestedDateStr, impersonateEmail) {
     }
 
     const prefs = getUserPrefs_(targetUser.email, usersData);
-
-    // Get Banner Text from Config
-    const bannerText = getConfigValue_('PLAN_WEEK_TEXT') || 'Planifica tu semana';
-    const bannerLimit = parseInt(getConfigValue_('PLAN_WEEK_LIMIT') || '5', 10);
     const mealPriceCurrent = getCurrentMealPrice_();
     const mealPriceHistory = getMealPriceHistory_();
-    const hintConfig = getHintConfig_();
+    const announcementConfig = getAnnouncementConfig_();
+    const provInfo = getProviderInfo_();
+    const userMealRatings = getUserMealRatingsMap_(targetUser.email);
+    const userProviderRating = getUserProviderRating_(targetUser.email, provInfo.periodId);
     const todayYmd = getTodayYmd_();
+    const serverHour = Number(Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'H'));
 
     const nextBizDay = getNextBusinessDay_(new Date());
 
@@ -373,9 +399,13 @@ function apiGetInitData(requestedDateStr, impersonateEmail) {
       allOrders: allOrders,
       myOrder: existingOrder,
       adminData: adminSummary,
-      bannerConfig: { text: bannerText, limit: bannerLimit },
       mealPricing: { current: mealPriceCurrent, history: mealPriceHistory },
-      hintConfig: hintConfig,
+      announcementConfig: announcementConfig,
+      providerInfo: provInfo,
+      userMealRatings: userMealRatings,
+      userProviderRating: userProviderRating,
+      serverHour: serverHour,
+      serverTime: new Date().toISOString(),
       todayYmd: todayYmd,
       chefGame: getChefGameState_(targetUser.email),
       deptMap: deptMap,
@@ -602,28 +632,512 @@ function apiSetUserPreference(key, value, targetEmail) {
   }
 }
 
-function apiDismissBanner() {
-   const user = getUserInfo_();
-   const prefs = getUserPrefs_(user.email);
-   let count = prefs.banner_count || 0;
-   count++;
-   return apiSetUserPreference('banner_count', count);
+function apiDismissAnnouncement(announcementId) {
+  try {
+    const user = getUserInfo_();
+    if (!user) throw new Error("Usuario no autenticado");
+    const activeId = String(announcementId || getConfigValue_('ANNOUNCEMENT_ID') || 'default').trim();
+    const prefs = getUserPrefs_(user.email);
+    const announcements = prefs.announcements || {};
+    announcements[activeId] = (Number(announcements[activeId]) || 0) + 1;
+    return apiSetUserPreference('announcements', announcements);
+  } catch (e) {
+    return { ok: false, msg: e.message };
+  }
 }
 
-function apiDismissSummaryCostHint() {
-   const user = getUserInfo_();
-   const prefs = getUserPrefs_(user.email);
-   let count = prefs.summary_cost_hint_count || 0;
-   count++;
-   return apiSetUserPreference('summary_cost_hint_count', count);
+function apiSaveAnnouncementConfig(payload) {
+  try {
+    const admin = getUserInfo_();
+    if (!admin || admin.rol !== 'ADMIN_GEN') throw new Error("Permiso denegado.");
+
+    ensureOperationalConfigKeys_();
+    const enabled = payload.enabled ? 'TRUE' : 'FALSE';
+    const expiresOn = normalizeAnnouncementDate_(payload.expiresOn, formatDateWithOffset_(30));
+    const maxDismiss = String(parsePositiveInt_(payload.maxDismiss, 3));
+    let announcementId = String(payload.id || '').trim();
+    if (payload.forceNewId || !announcementId) {
+      announcementId = 'anuncio_' + getTodayYmd_().replace(/-/g, '_') + '_' + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'HHmm');
+    }
+
+    const slides = Array.isArray(payload.slides) ? payload.slides : [];
+    const payloadJson = JSON.stringify({ slides: slides });
+
+    const ss = SpreadsheetApp.getActive();
+    const sh = ss.getSheetByName('Config');
+    const data = sh.getDataRange().getValues();
+
+    for (let i = 1; i < data.length; i++) {
+      const key = String(data[i][0]);
+      if (key === 'ANNOUNCEMENT_ENABLED') sh.getRange(i + 1, 2).setValue(enabled);
+      if (key === 'ANNOUNCEMENT_ID') sh.getRange(i + 1, 2).setValue(announcementId);
+      if (key === 'ANNOUNCEMENT_EXPIRES_ON') sh.getRange(i + 1, 2).setValue(expiresOn);
+      if (key === 'ANNOUNCEMENT_MAX_DISMISS') sh.getRange(i + 1, 2).setValue(maxDismiss);
+      if (key === 'ANNOUNCEMENT_PAYLOAD_JSON') sh.getRange(i + 1, 2).setValue(payloadJson);
+    }
+
+    _configCache = null;
+    invalidateUserInitCache_();
+    return {
+      ok: true,
+      announcementConfig: {
+        enabled: enabled === 'TRUE',
+        id: announcementId,
+        expiresOn: expiresOn,
+        maxDismiss: parseInt(maxDismiss, 10),
+        slides: slides
+      }
+    };
+  } catch (e) {
+    return { ok: false, msg: e.message };
+  }
 }
 
-function apiDismissCaldoMultiHint() {
-   const user = getUserInfo_();
-   const prefs = getUserPrefs_(user.email);
-   let count = prefs.caldo_multi_hint_count || 0;
-   count++;
-   return apiSetUserPreference('caldo_multi_hint_count', count);
+// === SISTEMA DE VALORACIONES (COMIDAS Y PROVEEDOR) ===
+
+function ensureRatingsSheets_() {
+  const ss = SpreadsheetApp.getActive();
+
+  // 1. ValoracionesComida
+  let mealSheet = ss.getSheetByName('ValoracionesComida');
+  const mealHeaders = [
+    'id', 'pedido_id', 'fecha_consumo', 'email_usuario', 'nombre_usuario', 'departamento',
+    'puntuacion', 'comentario', 'platos_resumen', 'timestamp_creacion', 'timestamp_actualizacion'
+  ];
+  if (!mealSheet) {
+    mealSheet = ss.insertSheet('ValoracionesComida');
+    mealSheet.getRange(1, 1, 1, mealHeaders.length).setValues([mealHeaders]);
+    mealSheet.getRange(1, 1, 1, mealHeaders.length).setFontWeight('bold').setBackground('#f3f4f6');
+    mealSheet.setFrozenRows(1);
+  } else {
+    ensureSheetHeaders_(mealSheet, mealHeaders);
+  }
+
+  // 2. ValoracionesProveedor
+  let provSheet = ss.getSheetByName('ValoracionesProveedor');
+  const provHeaders = [
+    'id', 'proveedor_periodo_id', 'proveedor_nombre', 'email_usuario', 'nombre_usuario', 'departamento',
+    'puntuacion', 'comentario', 'version_voto', 'timestamp_creacion', 'timestamp_actualizacion'
+  ];
+  if (!provSheet) {
+    provSheet = ss.insertSheet('ValoracionesProveedor');
+    provSheet.getRange(1, 1, 1, provHeaders.length).setValues([provHeaders]);
+    provSheet.getRange(1, 1, 1, provHeaders.length).setFontWeight('bold').setBackground('#f3f4f6');
+    provSheet.setFrozenRows(1);
+  } else {
+    ensureSheetHeaders_(provSheet, provHeaders);
+  }
+
+  // 3. HistoricoValoracionesProveedor
+  let histSheet = ss.getSheetByName('HistoricoValoracionesProveedor');
+  const histHeaders = [
+    'id', 'proveedor_periodo_id', 'proveedor_nombre', 'email_usuario', 'nombre_usuario', 'departamento',
+    'puntuacion', 'comentario', 'timestamp'
+  ];
+  if (!histSheet) {
+    histSheet = ss.insertSheet('HistoricoValoracionesProveedor');
+    histSheet.getRange(1, 1, 1, histHeaders.length).setValues([histHeaders]);
+    histSheet.getRange(1, 1, 1, histHeaders.length).setFontWeight('bold').setBackground('#f3f4f6');
+    histSheet.setFrozenRows(1);
+  } else {
+    ensureSheetHeaders_(histSheet, histHeaders);
+  }
+}
+
+function isMealRatingAllowed_(consumptionDateStr) {
+  if (!consumptionDateStr) return false;
+  const now = new Date();
+  const tz = Session.getScriptTimeZone();
+  const todayStr = Utilities.formatDate(now, tz, 'yyyy-MM-dd');
+
+  if (consumptionDateStr > todayStr) return false;
+  if (consumptionDateStr === todayStr) {
+    const hours = Number(Utilities.formatDate(now, tz, 'H'));
+    if (hours < 12) return false;
+  }
+  return true;
+}
+
+function getUserMealRatingsMap_(email) {
+  if (!email) return {};
+  ensureRatingsSheets_();
+  const sh = SpreadsheetApp.getActive().getSheetByName('ValoracionesComida');
+  if (!sh) return {};
+  const data = sh.getDataRange().getValues();
+  const map = {};
+  const targetEmail = String(email).toLowerCase();
+
+  for (let i = 1; i < data.length; i++) {
+    const rowEmail = String(data[i][3] || '').toLowerCase();
+    if (rowEmail === targetEmail) {
+      const dateStr = formatDate_(new Date(data[i][2]));
+      map[dateStr] = {
+        id: String(data[i][0] || ''),
+        pedidoId: String(data[i][1] || ''),
+        date: dateStr,
+        puntuacion: Number(data[i][6] || 0),
+        comentario: String(data[i][7] || ''),
+        platos: String(data[i][8] || ''),
+        updatedAt: String(data[i][10] || '')
+      };
+    }
+  }
+  return map;
+}
+
+function getUserProviderRating_(email, periodId) {
+  if (!email) return null;
+  ensureRatingsSheets_();
+  const sh = SpreadsheetApp.getActive().getSheetByName('ValoracionesProveedor');
+  if (!sh) return null;
+  const data = sh.getDataRange().getValues();
+  const targetEmail = String(email).toLowerCase();
+  const targetPeriodId = String(periodId || '').trim();
+
+  for (let i = 1; i < data.length; i++) {
+    const pId = String(data[i][1] || '').trim();
+    const rowEmail = String(data[i][3] || '').toLowerCase();
+    if (rowEmail === targetEmail && (!targetPeriodId || pId === targetPeriodId)) {
+      return {
+        id: String(data[i][0] || ''),
+        periodId: pId,
+        providerName: String(data[i][2] || ''),
+        puntuacion: Number(data[i][6] || 0),
+        comentario: String(data[i][7] || ''),
+        version: Number(data[i][8] || 1),
+        updatedAt: String(data[i][10] || '')
+      };
+    }
+  }
+  return null;
+}
+
+function apiSubmitMealRating(payload) {
+  try {
+    const activeUser = getUserInfo_();
+    if (!activeUser || activeUser.estado !== 'ACTIVO') throw new Error("Usuario no autorizado.");
+
+    const dateStr = String(payload.date || '').trim();
+    if (!dateStr) throw new Error("Fecha de consumo requerida.");
+
+    if (!isMealRatingAllowed_(dateStr)) {
+      throw new Error("Solo puedes valorar la comida el mismo día después de las 12:00 PM o días posteriores.");
+    }
+
+    const rating = parseInt(payload.rating, 10);
+    if (isNaN(rating) || rating < 1 || rating > 5) {
+      throw new Error("La puntuación debe ser un número entre 1 y 5 estrellas.");
+    }
+
+    const comment = String(payload.comment || '').trim();
+    if (comment.length > 500) {
+      throw new Error("El comentario no puede exceder los 500 caracteres.");
+    }
+
+    ensureRatingsSheets_();
+    const ss = SpreadsheetApp.getActive();
+
+    // Verify user had an active order on this date
+    const ordersData = readSheetValues_(ss.getSheetByName('Pedidos'), 9);
+    let orderRow = null;
+    for (let i = 1; i < ordersData.length; i++) {
+      const rowDate = formatDate_(new Date(ordersData[i][2]));
+      const rowEmail = String(ordersData[i][3] || '').toLowerCase();
+      const rowStatus = String(ordersData[i][8] || '');
+      if (rowEmail === activeUser.email.toLowerCase() && rowDate === dateStr && rowStatus !== 'CANCELADO') {
+        orderRow = ordersData[i];
+        break;
+      }
+    }
+
+    if (!orderRow) {
+      throw new Error("No se encontró un pedido activo para esta fecha.");
+    }
+
+    const orderId = String(orderRow[0] || '');
+    const dishesSummary = String(orderRow[6] || '');
+    const nowIso = new Date().toISOString();
+
+    const sh = ss.getSheetByName('ValoracionesComida');
+    const data = sh.getDataRange().getValues();
+    let rowIndex = -1;
+    let ratingId = '';
+
+    for (let i = 1; i < data.length; i++) {
+      const rEmail = String(data[i][3] || '').toLowerCase();
+      const rDate = formatDate_(new Date(data[i][2]));
+      if (rEmail === activeUser.email.toLowerCase() && rDate === dateStr) {
+        rowIndex = i + 1;
+        ratingId = String(data[i][0]);
+        break;
+      }
+    }
+
+    if (rowIndex > 0) {
+      sh.getRange(rowIndex, 7).setValue(rating);
+      sh.getRange(rowIndex, 8).setValue(comment);
+      sh.getRange(rowIndex, 9).setValue(dishesSummary);
+      sh.getRange(rowIndex, 11).setValue(nowIso);
+    } else {
+      ratingId = 'RAT_M_' + Utilities.getUuid();
+      const newRow = [
+        ratingId,
+        orderId,
+        dateStr,
+        activeUser.email.toLowerCase(),
+        activeUser.nombre,
+        activeUser.departamento || '',
+        rating,
+        comment,
+        dishesSummary,
+        nowIso,
+        nowIso
+      ];
+      sh.appendRow(newRow);
+    }
+
+    invalidateUserInitCache_();
+    return {
+      ok: true,
+      rating: {
+        id: ratingId,
+        orderId: orderId,
+        date: dateStr,
+        puntuacion: rating,
+        comentario: comment,
+        platos: dishesSummary,
+        updatedAt: nowIso
+      },
+      userMealRatings: getUserMealRatingsMap_(activeUser.email)
+    };
+  } catch (e) {
+    return { ok: false, msg: e.message };
+  }
+}
+
+function apiSubmitProviderRating(payload) {
+  try {
+    const activeUser = getUserInfo_();
+    if (!activeUser || activeUser.estado !== 'ACTIVO') throw new Error("Usuario no autorizado.");
+
+    const rating = parseInt(payload.rating, 10);
+    if (isNaN(rating) || rating < 1 || rating > 5) {
+      throw new Error("La puntuación del proveedor debe ser un número entre 1 y 5 estrellas.");
+    }
+
+    const comment = String(payload.comment || '').trim();
+    if (comment.length > 500) {
+      throw new Error("El comentario no puede exceder los 500 caracteres.");
+    }
+
+    ensureRatingsSheets_();
+    const provInfo = getProviderInfo_();
+    const ss = SpreadsheetApp.getActive();
+    const nowIso = new Date().toISOString();
+
+    const shProv = ss.getSheetByName('ValoracionesProveedor');
+    const data = shProv.getDataRange().getValues();
+    let rowIndex = -1;
+    let voteId = '';
+    let currentVersion = 1;
+
+    for (let i = 1; i < data.length; i++) {
+      const pId = String(data[i][1] || '').trim();
+      const uEmail = String(data[i][3] || '').toLowerCase();
+      if (pId === provInfo.periodId && uEmail === activeUser.email.toLowerCase()) {
+        rowIndex = i + 1;
+        voteId = String(data[i][0]);
+        currentVersion = Number(data[i][8] || 1) + 1;
+        break;
+      }
+    }
+
+    if (rowIndex > 0) {
+      shProv.getRange(rowIndex, 7).setValue(rating);
+      shProv.getRange(rowIndex, 8).setValue(comment);
+      shProv.getRange(rowIndex, 9).setValue(currentVersion);
+      shProv.getRange(rowIndex, 11).setValue(nowIso);
+    } else {
+      voteId = 'RAT_P_' + Utilities.getUuid();
+      const newRow = [
+        voteId,
+        provInfo.periodId,
+        provInfo.name,
+        activeUser.email.toLowerCase(),
+        activeUser.nombre,
+        activeUser.departamento || '',
+        rating,
+        comment,
+        currentVersion,
+        nowIso,
+        nowIso
+      ];
+      shProv.appendRow(newRow);
+    }
+
+    // Append to HistoricoValoracionesProveedor for audit & trend analysis
+    const shHist = ss.getSheetByName('HistoricoValoracionesProveedor');
+    shHist.appendRow([
+      voteId,
+      provInfo.periodId,
+      provInfo.name,
+      activeUser.email.toLowerCase(),
+      activeUser.nombre,
+      activeUser.departamento || '',
+      rating,
+      comment,
+      nowIso
+    ]);
+
+    invalidateUserInitCache_();
+    return {
+      ok: true,
+      providerRating: {
+        id: voteId,
+        periodId: provInfo.periodId,
+        providerName: provInfo.name,
+        puntuacion: rating,
+        comentario: comment,
+        version: currentVersion,
+        updatedAt: nowIso
+      }
+    };
+  } catch (e) {
+    return { ok: false, msg: e.message };
+  }
+}
+
+function apiResetProviderPeriod(payload) {
+  try {
+    const admin = getUserInfo_();
+    if (!admin || admin.rol !== 'ADMIN_GEN') throw new Error("Permiso denegado.");
+
+    const providerName = String(payload.providerName || '').trim();
+    if (!providerName) throw new Error("El nombre del proveedor es requerido.");
+
+    const todayStr = getTodayYmd_();
+    const periodId = payload.periodId ? String(payload.periodId).trim() : ('PROV_' + todayStr.replace(/-/g, '_') + '_' + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'HHmm'));
+
+    const ss = SpreadsheetApp.getActive();
+    const sh = ss.getSheetByName('Config');
+    const data = sh.getDataRange().getValues();
+
+    for (let i = 1; i < data.length; i++) {
+      const key = String(data[i][0]);
+      if (key === 'PROVIDER_NAME') sh.getRange(i + 1, 2).setValue(providerName);
+      if (key === 'PROVIDER_PERIOD_ID') sh.getRange(i + 1, 2).setValue(periodId);
+      if (key === 'PROVIDER_PERIOD_START') sh.getRange(i + 1, 2).setValue(todayStr);
+    }
+
+    _configCache = null;
+    invalidateUserInitCache_();
+    return {
+      ok: true,
+      providerInfo: {
+        name: providerName,
+        periodId: periodId,
+        periodStart: todayStr
+      }
+    };
+  } catch (e) {
+    return { ok: false, msg: e.message };
+  }
+}
+
+function apiGetRatingsSummary() {
+  try {
+    const admin = getUserInfo_();
+    if (!admin || (admin.rol !== 'ADMIN_GEN' && admin.rol !== 'ADMIN_DEP')) {
+      throw new Error("Permiso denegado.");
+    }
+
+    ensureRatingsSheets_();
+    const provInfo = getProviderInfo_();
+    const ss = SpreadsheetApp.getActive();
+
+    // 1. Provider ratings
+    const provSh = ss.getSheetByName('ValoracionesProveedor');
+    const provData = provSh.getDataRange().getValues();
+    let provTotal = 0;
+    let provSum = 0;
+    const provStarsCount = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+    const recentProvFeedback = [];
+
+    for (let i = 1; i < provData.length; i++) {
+      const pId = String(provData[i][1] || '').trim();
+      if (pId === provInfo.periodId) {
+        const score = Number(provData[i][6]);
+        if (score >= 1 && score <= 5) {
+          provTotal++;
+          provSum += score;
+          provStarsCount[score] = (provStarsCount[score] || 0) + 1;
+          recentProvFeedback.push({
+            id: String(provData[i][0]),
+            nombre: String(provData[i][4]),
+            departamento: String(provData[i][5]),
+            puntuacion: score,
+            comentario: String(provData[i][7] || ''),
+            version: Number(provData[i][8] || 1),
+            fecha: String(provData[i][10] || '').substring(0, 10)
+          });
+        }
+      }
+    }
+
+    const provAverage = provTotal > 0 ? (Math.round((provSum / provTotal) * 10) / 10) : 0;
+
+    // 2. Meal ratings
+    const mealSh = ss.getSheetByName('ValoracionesComida');
+    const mealData = mealSh.getDataRange().getValues();
+    let mealTotal = 0;
+    let mealSum = 0;
+    const mealStarsCount = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+    const recentMealFeedback = [];
+
+    for (let i = 1; i < mealData.length; i++) {
+      const score = Number(mealData[i][6]);
+      if (score >= 1 && score <= 5) {
+        mealTotal++;
+        mealSum += score;
+        mealStarsCount[score] = (mealStarsCount[score] || 0) + 1;
+        recentMealFeedback.push({
+          id: String(mealData[i][0]),
+          fechaConsumo: formatDate_(new Date(mealData[i][2])),
+          nombre: String(mealData[i][4]),
+          departamento: String(mealData[i][5]),
+          puntuacion: score,
+          comentario: String(mealData[i][7] || ''),
+          platos: String(mealData[i][8] || ''),
+          fecha: String(mealData[i][10] || '').substring(0, 10)
+        });
+      }
+    }
+
+    const mealAverage = mealTotal > 0 ? (Math.round((mealSum / mealTotal) * 10) / 10) : 0;
+
+    // Sort recent feedback by date desc
+    recentProvFeedback.sort((a, b) => (b.fecha || '').localeCompare(a.fecha || ''));
+    recentMealFeedback.sort((a, b) => (b.fechaConsumo || '').localeCompare(a.fechaConsumo || ''));
+
+    return {
+      ok: true,
+      providerStats: {
+        providerInfo: provInfo,
+        total: provTotal,
+        average: provAverage,
+        starsCount: provStarsCount,
+        recentFeedback: recentProvFeedback.slice(0, 50)
+      },
+      mealStats: {
+        total: mealTotal,
+        average: mealAverage,
+        starsCount: mealStarsCount,
+        recentFeedback: recentMealFeedback.slice(0, 50)
+      }
+    };
+  } catch (e) {
+    return { ok: false, msg: e.message };
+  }
 }
 // === AUTOMATIZACIÓN (TRIGGERS) ===
 
@@ -1126,7 +1640,7 @@ function apiSaveMenuCategory(categoryData) {
     if (state !== 'ACTIVO' && state !== 'INACTIVO') throw new Error('El estado de la categoria no es valido.');
 
     const sheet = ensureMenuCategoriesSheet_();
-    const data = readSheetValues_(sheet, 5);
+    const data = readSheetValues_(sheet, 8);
     const id = String(categoryData && categoryData.id || '').trim();
     const nameKey = normalizeCategoryLookupKey_(name);
     const idKey = normalizeCategoryLookupKey_(id);
@@ -1138,6 +1652,11 @@ function apiSaveMenuCategory(categoryData) {
     if (aliases.length > 10 || aliases.some(alias => alias.length > 80)) {
       throw new Error('Puedes definir hasta 10 alias de 80 caracteres cada uno.');
     }
+
+    const esCombinable = categoryData && (categoryData.es_combinable === false || String(categoryData.es_combinable).toUpperCase() === 'NO') ? 'NO' : 'SI';
+    const combinableConList = parseCategoryCombinableWith_(categoryData && categoryData.combinable_con);
+    const tipoSeleccion = String(categoryData && categoryData.tipo_seleccion || 'UNICA').trim().toUpperCase() === 'MULTIPLE' ? 'MULTIPLE' : 'UNICA';
+
     const candidateKeys = [name].concat(aliases).map(normalizeCategoryLookupKey_);
     let rowIndex = 0;
 
@@ -1154,12 +1673,25 @@ function apiSaveMenuCategory(categoryData) {
     }
 
     const savedId = rowIndex ? id : 'CAT_' + Utilities.getUuid();
-    const row = [savedId, name, order, state, aliases.join(', ')];
-    if (rowIndex) sheet.getRange(rowIndex, 1, 1, 5).setValues([row]);
+    const row = [savedId, name, order, state, aliases.join(', '), esCombinable, combinableConList.join(', '), tipoSeleccion];
+    if (rowIndex) sheet.getRange(rowIndex, 1, 1, 8).setValues([row]);
     else sheet.appendRow(row);
 
     invalidateMenuCategoriesCache_();
-    return { ok: true, category: { id: savedId, nombre: name, orden: order, estado: state, aliases: aliases }, categories: getMenuCategories_(true) };
+    return {
+      ok: true,
+      category: {
+        id: savedId,
+        nombre: name,
+        orden: order,
+        estado: state,
+        aliases: aliases,
+        es_combinable: esCombinable === 'SI',
+        combinable_con: combinableConList,
+        tipo_seleccion: tipoSeleccion
+      },
+      categories: getMenuCategories_(true)
+    };
   } catch (e) {
     return { ok: false, msg: e.message };
   }
@@ -2790,6 +3322,26 @@ function getConfigValue_(key) {
 
 function getOperationalConfigDefinitions_() {
   const defaultExpiry = formatDateWithOffset_(30);
+  const todayStr = getTodayYmd_();
+  const defaultAnnouncementPayload = JSON.stringify({
+    slides: [
+      {
+        badge: "¡Novedad!",
+        title: "Nuevo Sistema de Valoraciones",
+        description: "Ahora puedes calificar tus comidas a partir de las 12:00 PM y valorar al proveedor de alimentos general.",
+        icon: "fa-star",
+        theme: "amber"
+      },
+      {
+        badge: "Tu Opinión Cuenta",
+        title: "Evalúa al Proveedor de Alimentos",
+        description: "Califica y comenta el servicio del proveedor cuando quieras para ayudarnos a mantener y mejorar la calidad.",
+        icon: "fa-award",
+        theme: "indigo"
+      }
+    ]
+  });
+
   return [
     { key: 'LOGO_ID', value: '', description: 'ID del archivo de imagen del Logo en Drive' },
     { key: 'APP_URL', value: ScriptApp.getService().getUrl(), description: 'URL publica de la aplicacion (Web App)' },
@@ -2797,10 +3349,14 @@ function getOperationalConfigDefinitions_() {
     { key: 'MEAL_PRICE_HISTORY_JSON', value: '[{"from":"1900-01-01","price":57}]', description: 'Historial auto-administrado del costo por almuerzo. No editar manualmente.' },
     { key: 'MENU_DAY_ENDPOINT_TOKEN', value: generateSecretToken_(), description: 'Token secreto para consumir el endpoint JSON de menu por fecha. Generar y compartir solo con TI.' },
     { key: 'RESPONSIBLES_EMAILS_JSON', value: '[]', description: 'JSON de correos externos en copia para el resumen diario general.' },
-    { key: 'SUMMARY_COST_HINT_LIMIT', value: '3', description: 'Cantidad maxima de cierres del hint del costo acumulado antes de ocultarlo.' },
-    { key: 'SUMMARY_COST_HINT_EXPIRES_ON', value: defaultExpiry, description: 'Fecha limite para mostrar el hint del costo acumulado (YYYY-MM-DD).' },
-    { key: 'CALDO_MULTI_HINT_LIMIT', value: '3', description: 'Cantidad maxima de cierres del hint de multiseleccion en Caldo.' },
-    { key: 'CALDO_MULTI_HINT_EXPIRES_ON', value: defaultExpiry, description: 'Fecha limite para mostrar el hint de multiseleccion en Caldo (YYYY-MM-DD).' }
+    { key: 'ANNOUNCEMENT_ENABLED', value: 'TRUE', description: 'Indica si el aviso general está activo para los usuarios (TRUE/FALSE)' },
+    { key: 'ANNOUNCEMENT_ID', value: 'anuncio_v7_31_valoraciones', description: 'Identificador único del aviso activo. Al cambiarlo, todos los usuarios volverán a verlo.' },
+    { key: 'ANNOUNCEMENT_EXPIRES_ON', value: defaultExpiry, description: 'Fecha límite para mostrar el aviso general (YYYY-MM-DD)' },
+    { key: 'ANNOUNCEMENT_MAX_DISMISS', value: '3', description: 'Cantidad máxima de veces que el usuario puede cerrar el aviso antes de que no aparezca más.' },
+    { key: 'ANNOUNCEMENT_PAYLOAD_JSON', value: defaultAnnouncementPayload, description: 'Contenido en formato JSON de los slides del aviso general.' },
+    { key: 'PROVIDER_NAME', value: 'Proveedor de Alimentos', description: 'Nombre del proveedor de alimentos activo.' },
+    { key: 'PROVIDER_PERIOD_ID', value: 'PROV_2026_01', description: 'Identificador del ciclo/período de evaluación del proveedor actual.' },
+    { key: 'PROVIDER_PERIOD_START', value: todayStr, description: 'Fecha de inicio del ciclo del proveedor actual (YYYY-MM-DD).' }
   ];
 }
 
@@ -2848,30 +3404,58 @@ function ensureMealPriceConfig_() {
   ensureConfigKey_('MEAL_PRICE_HISTORY_JSON', '[{"from":"1900-01-01","price":57}]', 'Historial auto-administrado del costo por almuerzo. No editar manualmente.');
 }
 
-function ensureHintConfigKeys_() {
-  const defaultExpiry = formatDateWithOffset_(30);
-  ensureConfigKey_('SUMMARY_COST_HINT_LIMIT', '3', 'Cantidad maxima de cierres del hint del costo acumulado antes de ocultarlo.');
-  ensureConfigKey_('SUMMARY_COST_HINT_EXPIRES_ON', defaultExpiry, 'Fecha limite para mostrar el hint del costo acumulado (YYYY-MM-DD).');
-  ensureConfigKey_('CALDO_MULTI_HINT_LIMIT', '3', 'Cantidad maxima de cierres del hint de multiseleccion en Caldo.');
-  ensureConfigKey_('CALDO_MULTI_HINT_EXPIRES_ON', defaultExpiry, 'Fecha limite para mostrar el hint de multiseleccion en Caldo (YYYY-MM-DD).');
-}
+function getAnnouncementConfig_() {
+  ensureOperationalConfigKeys_();
+  const enabledRaw = String(getConfigValue_('ANNOUNCEMENT_ENABLED') || 'FALSE').trim().toUpperCase();
+  const enabled = enabledRaw === 'TRUE' || enabledRaw === 'SI' || enabledRaw === '1';
+  const id = String(getConfigValue_('ANNOUNCEMENT_ID') || 'anuncio_default').trim();
+  const expiresOn = normalizeAnnouncementDate_(getConfigValue_('ANNOUNCEMENT_EXPIRES_ON'), formatDateWithOffset_(30));
+  const maxDismiss = parsePositiveInt_(getConfigValue_('ANNOUNCEMENT_MAX_DISMISS'), 3);
+  const rawPayload = getConfigValue_('ANNOUNCEMENT_PAYLOAD_JSON');
 
-function getHintConfig_() {
+  let slides = [];
+  try {
+    const parsed = JSON.parse(rawPayload || '{}');
+    if (Array.isArray(parsed.slides)) slides = parsed.slides;
+    else if (Array.isArray(parsed)) slides = parsed;
+  } catch (e) {
+    slides = [];
+  }
+
+  if (slides.length === 0) {
+    slides = [{
+      badge: "Aviso",
+      title: "Información importante",
+      description: "Por favor revisa tus pedidos y mantén tus preferencias actualizadas.",
+      icon: "fa-bullhorn",
+      theme: "indigo"
+    }];
+  }
+
   return {
-    summaryCost: {
-      limit: parsePositiveInt_(getConfigValue_('SUMMARY_COST_HINT_LIMIT'), 3),
-      expiresOn: normalizeHintDate_(getConfigValue_('SUMMARY_COST_HINT_EXPIRES_ON'), formatDateWithOffset_(30))
-    },
-    caldoMulti: {
-      limit: parsePositiveInt_(getConfigValue_('CALDO_MULTI_HINT_LIMIT'), 3),
-      expiresOn: normalizeHintDate_(getConfigValue_('CALDO_MULTI_HINT_EXPIRES_ON'), formatDateWithOffset_(30))
-    }
+    enabled: enabled,
+    id: id,
+    expiresOn: expiresOn,
+    maxDismiss: maxDismiss,
+    slides: slides
   };
 }
 
-function normalizeHintDate_(value, fallback) {
+function normalizeAnnouncementDate_(value, fallback) {
   const normalized = String(value || '').trim();
   return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : fallback;
+}
+
+function getProviderInfo_() {
+  ensureOperationalConfigKeys_();
+  const name = String(getConfigValue_('PROVIDER_NAME') || 'Proveedor de Alimentos').trim();
+  const periodId = String(getConfigValue_('PROVIDER_PERIOD_ID') || 'PROV_2026_01').trim();
+  const periodStart = String(getConfigValue_('PROVIDER_PERIOD_START') || getTodayYmd_()).trim();
+  return {
+    name: name,
+    periodId: periodId,
+    periodStart: periodStart
+  };
 }
 
 function parsePositiveInt_(value, fallback) {
@@ -3287,17 +3871,39 @@ function getOrdersByDate_(dateStr, ordersData, deptMap) {
 function validateOrderRules_(sel) {
   const cats = sel.categorias || [];
   const items = sel.items || [];
-  const specialList = ['Vegetariana', 'Caldo', 'Opcion_Rapida'];
-  const hasSpecial = cats.some(c => specialList.includes(c));
-  if (hasSpecial && cats.length > 1) {
-     const uniqueCats = [...new Set(cats)];
-     if (uniqueCats.some(c => !specialList.includes(c))) throw new Error("Platos especiales no se pueden combinar con el menú regular.");
+  if (!cats || cats.length === 0) return;
+
+  const categoryMap = getMenuCategoryMap_();
+  const uniqueCats = [...new Set(cats)];
+
+  // 1. Validar reglas de combinabilidad dinámicas
+  for (let i = 0; i < uniqueCats.length; i++) {
+    const catId = uniqueCats[i];
+    const cat = categoryMap[catId];
+    if (!cat) continue;
+
+    if (!cat.es_combinable && uniqueCats.length > 1) {
+      const allowed = Array.isArray(cat.combinable_con) ? cat.combinable_con : [];
+      const hasDisallowed = uniqueCats.some(otherId => otherId !== catId && !allowed.includes(otherId));
+      if (hasDisallowed) {
+        throw new Error("La categoría " + (cat.nombre || catId) + " no se puede combinar con el menú seleccionado.");
+      }
+    } else if (cat.es_combinable && Array.isArray(cat.combinable_con) && cat.combinable_con.length > 0) {
+      const hasDisallowed = uniqueCats.some(otherId => otherId !== catId && !cat.combinable_con.includes(otherId));
+      if (hasDisallowed) {
+        throw new Error("La categoría " + (cat.nombre || catId) + " solo se puede combinar con las categorías permitidas.");
+      }
+    }
   }
+
+  // 2. Reglas tradicionales de granos y arroz vs víveres
   if (cats.includes('Granos')) {
-    const hasWhiteRice = items.some(i => i.toLowerCase().includes('arroz blanco'));
+    const hasWhiteRice = items.some(i => String(i).toLowerCase().includes('arroz blanco'));
     if (!hasWhiteRice) throw new Error("Los granos requieren seleccionar Arroz Blanco.");
   }
-  if (cats.includes('Arroces') && cats.includes('Viveres')) throw new Error("No puedes combinar Arroz y Víveres.");
+  if (cats.includes('Arroces') && cats.includes('Viveres')) {
+    throw new Error("No puedes combinar Arroz y Víveres.");
+  }
 }
 
 function buildOrderRecordId_(email, dateStr) {

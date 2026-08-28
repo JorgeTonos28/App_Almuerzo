@@ -24,17 +24,26 @@ createApp({
     const allOrders = ref({});
     const menuCategories = ref([]);
     const remindersEnabled = ref(true);
-    const showMultiDayBanner = ref(false);
-    const bannerConfig = ref({ text: '', limit: 5 });
     const mealPricing = ref({ current: 57, history: [{ from: '1900-01-01', price: 57 }] });
     const currentUserPrefs = ref({});
     const todayYmd = ref('');
-    const hintConfig = ref({
-      summaryCost: { limit: 3, expiresOn: '' },
-      caldoMulti: { limit: 3, expiresOn: '' }
-    });
-    const summaryCostHintEl = ref(null);
-    const hasFocusedSummaryCostHint = ref(false);
+    const serverHour = ref(12);
+    const serverTime = ref('');
+
+    // Aviso General
+    const announcementConfig = ref({ enabled: false, id: '', expiresOn: '', maxDismiss: 3, slides: [] });
+    const showAnnouncementModal = ref(false);
+    const announcementSlideIndex = ref(0);
+    const announcementEditModal = ref({ open: false, enabled: true, expiresOn: '', maxDismiss: 3, slides: [], saving: false });
+
+    // Proveedor y Valoraciones
+    const providerInfo = ref({ name: 'Proveedor de Alimentos', periodId: 'PROV_2026_01', periodStart: '' });
+    const userMealRatings = ref({});
+    const userProviderRating = ref(null);
+    const mealRatingModal = ref({ open: false, date: '', dateLabel: '', orderId: '', rating: 5, comment: '', dishes: '', saving: false, error: null });
+    const providerRatingModal = ref({ open: false, rating: 5, comment: '', saving: false, error: null });
+    const providerResetModal = ref({ open: false, providerName: '', saving: false, error: null });
+    const ratingsSummary = ref({ providerStats: null, mealStats: null, loading: false });
     const chefGameState = ref({
       score: 0,
       remainingSeconds: 900,
@@ -382,12 +391,6 @@ createApp({
       return resolvedPrice;
     };
 
-    const isHintActive = (config, prefKey) => {
-      if (!config || !todayYmd.value || !config.expiresOn) return false;
-      if (todayYmd.value > config.expiresOn) return false;
-      return Number(currentUserPrefs.value?.[prefKey] || 0) < Number(config.limit || 0);
-    };
-
     const resetSelectionState = () => {
       selection.clear();
       for (const prop of Object.getOwnPropertyNames(selectionData)) {
@@ -396,30 +399,7 @@ createApp({
       comments.value = '';
     };
 
-    const showSummaryCostHint = computed(() => {
-      return userWeeklySummary.value.length > 0 && isHintActive(hintConfig.value.summaryCost, 'summary_cost_hint_count');
-    });
-
-    const showCaldoMultiHint = computed(() => {
-      return Array.isArray(menu.value?.Caldo) && menu.value.Caldo.length > 0 && isHintActive(hintConfig.value.caldoMulti, 'caldo_multi_hint_count');
-    });
-
     const shouldScrollSummaryCards = computed(() => userWeeklySummary.value.length > 8);
-
-    const focusSummaryCostHint = () => {
-      if (hasFocusedSummaryCostHint.value) return;
-      if (!showSummaryCostHint.value || userWeeklySummary.value.length === 0) return;
-
-      nextTick(() => {
-        window.setTimeout(() => {
-          const el = summaryCostHintEl.value;
-          if (!el) return;
-          hasFocusedSummaryCostHint.value = true;
-          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          if (typeof el.focus === 'function') el.focus({ preventScroll: true });
-        }, 250);
-      });
-    };
 
     // === SUMMARY TABLE HELPERS ===
     const summaryHeaders = computed(() => {
@@ -519,25 +499,52 @@ createApp({
     });
 
     const isSpecialSelected = computed(() => {
-      return selectedCats.value.some(c => specialCats.includes(c));
+      return selectedCats.value.some(c => {
+        const cat = categoryById.value[c];
+        return cat ? !cat.es_combinable : specialCats.includes(c);
+      });
     });
 
     // Validar si una categoría entera debe bloquearse (gris)
     const isCatDisabled = (cat) => {
-      // 1. Si elegí un especial, bloqueo todo lo que NO sea esa misma categoría especial
-      if (isSpecialSelected.value) {
-        if (selectedCats.value.includes(cat)) return false;
-        return true;
+      const targetCat = categoryById.value[cat];
+      const selected = selectedCats.value;
+      if (selected.length === 0) return false;
+
+      // 1. Si la categoría ya está seleccionada, no se deshabilita
+      if (selected.includes(cat)) return false;
+
+      // 2. Verificar reglas dinámicas de las categorías ya seleccionadas
+      for (const selCatId of selected) {
+        const selCat = categoryById.value[selCatId];
+        if (selCat) {
+          if (!selCat.es_combinable) {
+            const allowed = Array.isArray(selCat.combinable_con) ? selCat.combinable_con : [];
+            if (!allowed.includes(cat)) return true;
+          } else if (Array.isArray(selCat.combinable_con) && selCat.combinable_con.length > 0) {
+            if (!selCat.combinable_con.includes(cat)) return true;
+          }
+        }
       }
 
-      // 2. Regla Granos (Estricta)
-      if (selectedCats.value.includes('Granos')) {
-        const allowed = ['Granos', 'Arroces', 'Carnes', 'Ensaladas', 'Caldo'];
+      // 3. Verificar si la categoría objetivo permite combinarse con las seleccionadas
+      if (targetCat) {
+        if (!targetCat.es_combinable) {
+          const allowed = Array.isArray(targetCat.combinable_con) ? targetCat.combinable_con : [];
+          if (selected.some(sId => !allowed.includes(sId))) return true;
+        } else if (Array.isArray(targetCat.combinable_con) && targetCat.combinable_con.length > 0) {
+          if (selected.some(sId => !targetCat.combinable_con.includes(sId))) return true;
+        }
+      }
+
+      // 4. Regla Granos (Estricta)
+      if (selected.includes('Granos')) {
+        const allowed = ['Granos', 'Arroces', 'Carnes', 'Ensaladas', 'Caldo', 'Frituritas'];
         if (!allowed.includes(cat)) return true;
       }
 
       if (cat === 'Granos') {
-         if (selectedCats.value.some(c => ['Viveres', 'Vegetariana', 'Opcion_Rapida'].includes(c))) return true;
+         if (selected.some(c => ['Viveres', 'Vegetariana', 'Opcion_Rapida'].includes(c))) return true;
          let hasNonWhiteRice = false;
          selection.forEach(id => {
             const item = selectionData[id];
@@ -546,12 +553,9 @@ createApp({
          if (hasNonWhiteRice) return true;
       }
 
-      // 3. Regla Arroz vs Viveres (Mutuamente exclusivos)
-      if (cat === 'Arroces' && selectedCats.value.includes('Viveres')) return true;
-      if (cat === 'Viveres' && selectedCats.value.includes('Arroces')) return true;
-
-      // 4. Si elegí algo "Regular" (Arroz, Carne, etc.), bloqueo los "Especiales"
-      if (selectedCount.value > 0 && specialCats.includes(cat)) return true;
+      // 5. Regla Arroz vs Viveres (Mutuamente exclusivos)
+      if (cat === 'Arroces' && selected.includes('Viveres')) return true;
+      if (cat === 'Viveres' && selected.includes('Arroces')) return true;
 
       return false;
     };
@@ -616,13 +620,31 @@ createApp({
       if (res.deptMap) adminState.deptMap = res.deptMap;
       if (res.nextBusinessDay) adminState.nextBusinessDay = res.nextBusinessDay;
 
-      bannerConfig.value = res.bannerConfig || { text: '', limit: 5 };
-      showMultiDayBanner.value = Number(res.userPrefs?.banner_count || 0) < Number(bannerConfig.value.limit || 0);
       mealPricing.value = res.mealPricing || { current: 57, history: [{ from: '1900-01-01', price: 57 }] };
-      hintConfig.value = res.hintConfig || hintConfig.value;
       todayYmd.value = res.todayYmd || todayYmd.value;
+      serverHour.value = res.serverHour !== undefined ? res.serverHour : new Date().getHours();
+      serverTime.value = res.serverTime || new Date().toISOString();
+
+      // Aviso General
+      announcementConfig.value = res.announcementConfig || { enabled: false, id: '', expiresOn: '', maxDismiss: 3, slides: [] };
+      if (announcementConfig.value.enabled) {
+        const today = todayYmd.value || new Date().toISOString().substring(0, 10);
+        const expires = announcementConfig.value.expiresOn;
+        const isNotExpired = !expires || today <= expires;
+        const dismissCount = Number(res.userPrefs?.announcements?.[announcementConfig.value.id] || 0);
+        const maxDismiss = Number(announcementConfig.value.maxDismiss || 3);
+        if (isNotExpired && dismissCount < maxDismiss) {
+          showAnnouncementModal.value = true;
+          announcementSlideIndex.value = 0;
+        }
+      }
+
+      // Proveedor y Valoraciones
+      providerInfo.value = res.providerInfo || { name: 'Proveedor de Alimentos', periodId: 'PROV_2026_01', periodStart: '' };
+      userMealRatings.value = res.userMealRatings || {};
+      userProviderRating.value = res.userProviderRating || null;
+
       setChefGameState(res.chefGame || {});
-      hasFocusedSummaryCostHint.value = false;
       if (res.activeUser?.email) startHeartbeat();
       else stopHeartbeat();
 
@@ -632,8 +654,6 @@ createApp({
       if ((res.activeUser?.rol === 'ADMIN_GEN' || res.activeUser?.rol === 'ADMIN_DEP') && adminState.users.length === 0 && !adminState.loading) {
         window.setTimeout(() => loadAdminData(false, { silent: true }), 120);
       }
-
-      focusSummaryCostHint();
     };
 
     const applyDateViewData = (res) => {
@@ -1304,8 +1324,11 @@ createApp({
         selection.delete(item.id);
         delete selectionData[item.id];
       } else {
+        const catConfig = categoryById.value[cat];
+        const isMulti = catConfig ? catConfig.tipo_seleccion === 'MULTIPLE' : multiSelectCats.includes(cat);
+
         // Single selection rule
-        if (!multiSelectCats.includes(cat)) {
+        if (!isMulti) {
            const toRemove = [];
            selection.forEach(id => {
               if (selectionData[id] && selectionData[id].cat === cat) toRemove.push(id);
@@ -1700,8 +1723,22 @@ createApp({
     const openCategoryModal = (category = null) => {
        adminState.categoryModal.isNew = !category;
        adminState.categoryModal.data = category
-         ? { ...category, aliasesText: (category.aliases || []).join(', ') }
-         : { nombre: '', orden: (menuCategories.value.length + 1) * 10, estado: 'ACTIVO', aliasesText: '' };
+         ? {
+             ...category,
+             aliasesText: (category.aliases || []).join(', '),
+             es_combinable: category.es_combinable !== false,
+             combinable_con: Array.isArray(category.combinable_con) ? [...category.combinable_con] : [],
+             tipo_seleccion: category.tipo_seleccion || 'UNICA'
+           }
+         : {
+             nombre: '',
+             orden: (menuCategories.value.length + 1) * 10,
+             estado: 'ACTIVO',
+             aliasesText: '',
+             es_combinable: true,
+             combinable_con: [],
+             tipo_seleccion: 'UNICA'
+           };
        adminState.categoryModal.open = true;
     };
 
@@ -1731,6 +1768,57 @@ createApp({
     // Menu Import Logic
     const openMenuImportModal = () => {
        adminState.menuImportModal = { open: true, step: 1, weekStart: '', text: '', preview: [], error: null };
+    };
+
+    const parseTsvRows = (raw) => {
+       const rows = [];
+       let currentRow = [];
+       let currentCell = '';
+       let insideQuotes = false;
+
+       for (let i = 0; i < raw.length; i++) {
+          const char = raw[i];
+          const nextChar = raw[i + 1];
+
+          if (char === '"') {
+             if (insideQuotes && nextChar === '"') {
+                currentCell += '"';
+                i++;
+             } else {
+                insideQuotes = !insideQuotes;
+             }
+          } else if (char === '\t' && !insideQuotes) {
+             currentRow.push(currentCell.trim());
+             currentCell = '';
+          } else if ((char === '\r' || char === '\n') && !insideQuotes) {
+             if (char === '\r' && nextChar === '\n') i++;
+             currentRow.push(currentCell.trim());
+             if (currentRow.some(c => c !== '')) rows.push(currentRow);
+             currentRow = [];
+             currentCell = '';
+          } else {
+             if (insideQuotes && (char === '\n' || char === '\r')) {
+                if (char === '\r' && nextChar === '\n') i++;
+                if (currentCell.length > 0 && currentCell[currentCell.length - 1] !== ' ') {
+                   currentCell += ' ';
+                }
+             } else {
+                currentCell += char;
+             }
+          }
+       }
+
+       currentRow.push(currentCell.trim());
+       if (currentRow.some(c => c !== '')) rows.push(currentRow);
+
+       return rows.map(row => row.map(cell => {
+          let c = String(cell || '').trim();
+          if (c.startsWith('"') && c.endsWith('"') && c.length >= 2) {
+             c = c.slice(1, -1).trim();
+          }
+          if (c === '"' || c === '""') c = '';
+          return c;
+       }));
     };
 
     const processMenuImport = () => {
@@ -1771,8 +1859,8 @@ createApp({
           }
        }
 
-       // 2. Parse Text
-       const lines = text.split('\n').map(l => l.trimEnd()); // Keep tabs
+       // 2. Parse Text using Robust TSV Parser
+       const parsedRows = parseTsvRows(text);
        const normalizeCategoryLookupKey = (value) => String(value || '')
           .normalize('NFD')
           .replace(/[\u0300-\u036f]/g, '')
@@ -1790,9 +1878,8 @@ createApp({
        let currentCat = null;
        const columns = {}; // Idx -> { Cat -> [items] }
 
-       lines.forEach(line => {
-          if(!line.trim()) return;
-          const cells = line.split('\t').map(c => c.trim());
+       parsedRows.forEach(cells => {
+          if(!cells || cells.length === 0 || !cells.some(c => c)) return;
 
           // Detect Category Header
           const firstCellKey = normalizeCategoryLookupKey(cells[0]);
@@ -1806,10 +1893,11 @@ createApp({
 
           if(currentCat) {
              cells.forEach((cell, idx) => {
-                if(cell && !['N/A', 'n/a', 'N/a'].includes(cell)) {
+                const cleaned = String(cell || '').trim();
+                if(cleaned && !['N/A', 'n/a', 'N/a', '"', '""'].includes(cleaned)) {
                    if(!columns[idx]) columns[idx] = {};
                    if(!columns[idx][currentCat]) columns[idx][currentCat] = [];
-                   columns[idx][currentCat].push(formatMenuText(cell));
+                   columns[idx][currentCat].push(formatMenuText(cleaned));
                 }
              });
           }
@@ -1962,25 +2050,231 @@ createApp({
        adminState.deptModal.data.admins = current.join(', ');
     };
 
-    const dismissBanner = () => {
-      showMultiDayBanner.value = false;
-      google.script.run.apiDismissBanner();
+    // Métodos de Aviso General
+    const dismissAnnouncement = () => {
+      showAnnouncementModal.value = false;
+      const id = announcementConfig.value.id;
+      if (id) {
+        if (!currentUserPrefs.value.announcements) currentUserPrefs.value.announcements = {};
+        currentUserPrefs.value.announcements[id] = (Number(currentUserPrefs.value.announcements[id]) || 0) + 1;
+        google.script.run.apiDismissAnnouncement(id);
+      }
     };
 
-    const dismissSummaryCostHint = () => {
-      currentUserPrefs.value = {
-        ...currentUserPrefs.value,
-        summary_cost_hint_count: Number(currentUserPrefs.value?.summary_cost_hint_count || 0) + 1
-      };
-      google.script.run.apiDismissSummaryCostHint();
+    const nextAnnouncementSlide = () => {
+      const total = announcementConfig.value.slides ? announcementConfig.value.slides.length : 0;
+      if (announcementSlideIndex.value < total - 1) {
+        announcementSlideIndex.value++;
+      } else {
+        dismissAnnouncement();
+      }
     };
 
-    const dismissCaldoMultiHint = () => {
-      currentUserPrefs.value = {
-        ...currentUserPrefs.value,
-        caldo_multi_hint_count: Number(currentUserPrefs.value?.caldo_multi_hint_count || 0) + 1
+    const prevAnnouncementSlide = () => {
+      if (announcementSlideIndex.value > 0) {
+        announcementSlideIndex.value--;
+      }
+    };
+
+    const openAnnouncementConfigModal = () => {
+      const cfg = announcementConfig.value || {};
+      announcementEditModal.value = {
+        open: true,
+        enabled: cfg.enabled !== false,
+        id: cfg.id || 'anuncio_v7_31_valoraciones',
+        expiresOn: cfg.expiresOn || todayYmd.value,
+        maxDismiss: cfg.maxDismiss || 3,
+        slides: Array.isArray(cfg.slides) ? JSON.parse(JSON.stringify(cfg.slides)) : [],
+        forceNewId: false,
+        saving: false
       };
-      google.script.run.apiDismissCaldoMultiHint();
+      if (announcementEditModal.value.slides.length === 0) {
+        announcementEditModal.value.slides.push({
+          badge: "¡Novedad!",
+          title: "Nuevo Aviso",
+          description: "Escribe aquí la descripción del aviso para los colaboradores.",
+          icon: "fa-bullhorn",
+          theme: "indigo"
+        });
+      }
+    };
+
+    const addAnnouncementSlide = () => {
+      announcementEditModal.value.slides.push({
+        badge: "Novedad",
+        title: "Nuevo Slide",
+        description: "",
+        icon: "fa-circle-info",
+        theme: "indigo"
+      });
+    };
+
+    const removeAnnouncementSlide = (idx) => {
+      if (announcementEditModal.value.slides.length > 1) {
+        announcementEditModal.value.slides.splice(idx, 1);
+      }
+    };
+
+    const saveAnnouncementConfig = () => {
+      announcementEditModal.value.saving = true;
+      google.script.run
+        .withSuccessHandler(res => {
+          announcementEditModal.value.saving = false;
+          if (res.ok) {
+            announcementConfig.value = res.announcementConfig;
+            announcementEditModal.value.open = false;
+            showModal("Aviso general guardado correctamente.", "Éxito");
+          } else {
+            showModal(res.msg || "Error guardando el aviso.", "Error");
+          }
+        })
+        .withFailureHandler(err => {
+          announcementEditModal.value.saving = false;
+          showModal(err.message || "Error de conexión.", "Error");
+        })
+        .apiSaveAnnouncementConfig(announcementEditModal.value);
+    };
+
+    // Métodos de Valoración de Comidas
+    const canRateMeal = (dateStr) => {
+      if (!dateStr || !allOrders.value[dateStr] || allOrders.value[dateStr].estado === 'CANCELADO') return false;
+      const today = todayYmd.value || new Date().toISOString().substring(0, 10);
+      if (dateStr < today) return true;
+      if (dateStr === today) {
+        const currentH = new Date().getHours();
+        return currentH >= 12 || Number(serverHour.value) >= 12;
+      }
+      return false;
+    };
+
+    const openMealRatingModal = (row) => {
+      const existing = userMealRatings.value[row.date] || {};
+      mealRatingModal.value = {
+        open: true,
+        date: row.date,
+        dateLabel: row.label,
+        orderId: row.id || (allOrders.value[row.date] ? allOrders.value[row.date].id : ''),
+        rating: existing.puntuacion || 5,
+        comment: existing.comentario || '',
+        dishes: existing.platos || Object.values(row.items || {}).map(formatMenuText).join(', '),
+        saving: false,
+        error: null
+      };
+    };
+
+    const saveMealRating = () => {
+      mealRatingModal.value.saving = true;
+      mealRatingModal.value.error = null;
+      google.script.run
+        .withSuccessHandler(res => {
+          mealRatingModal.value.saving = false;
+          if (res.ok) {
+            mealRatingModal.value.open = false;
+            userMealRatings.value[res.rating.date] = res.rating;
+            showModal("¡Gracias por calificar tu comida!", "Valoración Recibida");
+          } else {
+            mealRatingModal.value.error = res.msg || "Error al guardar la valoración.";
+          }
+        })
+        .withFailureHandler(err => {
+          mealRatingModal.value.saving = false;
+          mealRatingModal.value.error = err.message || "Error de conexión.";
+        })
+        .apiSubmitMealRating({
+          date: mealRatingModal.value.date,
+          rating: mealRatingModal.value.rating,
+          comment: mealRatingModal.value.comment
+        });
+    };
+
+    // Métodos de Valoración de Proveedor
+    const openProviderRatingModal = () => {
+      const existing = userProviderRating.value || {};
+      providerRatingModal.value = {
+        open: true,
+        rating: existing.puntuacion || 5,
+        comment: existing.comentario || '',
+        version: existing.version || 1,
+        saving: false,
+        error: null
+      };
+    };
+
+    const saveProviderRating = () => {
+      providerRatingModal.value.saving = true;
+      providerRatingModal.value.error = null;
+      google.script.run
+        .withSuccessHandler(res => {
+          providerRatingModal.value.saving = false;
+          if (res.ok) {
+            providerRatingModal.value.open = false;
+            userProviderRating.value = res.providerRating;
+            showModal("¡Gracias por calificar al proveedor de alimentos!", "Valoración Recibida");
+          } else {
+            providerRatingModal.value.error = res.msg || "Error al guardar la valoración.";
+          }
+        })
+        .withFailureHandler(err => {
+          providerRatingModal.value.saving = false;
+          providerRatingModal.value.error = err.message || "Error de conexión.";
+        })
+        .apiSubmitProviderRating({
+          rating: providerRatingModal.value.rating,
+          comment: providerRatingModal.value.comment
+        });
+    };
+
+    const openProviderResetModal = () => {
+      providerResetModal.value = {
+        open: true,
+        providerName: providerInfo.value.name || '',
+        saving: false,
+        error: null
+      };
+    };
+
+    const saveProviderReset = () => {
+      if (!providerResetModal.value.providerName.trim()) {
+        providerResetModal.value.error = "El nombre del proveedor es obligatorio.";
+        return;
+      }
+      providerResetModal.value.saving = true;
+      google.script.run
+        .withSuccessHandler(res => {
+          providerResetModal.value.saving = false;
+          if (res.ok) {
+            providerResetModal.value.open = false;
+            providerInfo.value = res.providerInfo;
+            userProviderRating.value = null;
+            showModal("Período de evaluación del proveedor actualizado exitosamente.", "Éxito");
+            loadRatingsSummary();
+          } else {
+            providerResetModal.value.error = res.msg || "Error actualizando el proveedor.";
+          }
+        })
+        .withFailureHandler(err => {
+          providerResetModal.value.saving = false;
+          providerResetModal.value.error = err.message || "Error de conexión.";
+        })
+        .apiResetProviderPeriod({
+          providerName: providerResetModal.value.providerName
+        });
+    };
+
+    const loadRatingsSummary = () => {
+      ratingsSummary.value.loading = true;
+      google.script.run
+        .withSuccessHandler(res => {
+          ratingsSummary.value.loading = false;
+          if (res.ok) {
+            ratingsSummary.value.providerStats = res.providerStats;
+            ratingsSummary.value.mealStats = res.mealStats;
+          }
+        })
+        .withFailureHandler(() => {
+          ratingsSummary.value.loading = false;
+        })
+        .apiGetRatingsSummary();
     };
 
     const submitOrder = () => {
@@ -2180,12 +2474,24 @@ createApp({
       toggleItem, isSelected, hasSelectionInCat, isCatDisabled, isItemDisabled,
       
       // Estado
-      remindersEnabled, showMultiDayBanner, bannerConfig, showSummaryCostHint, showCaldoMultiHint, shouldScrollSummaryCards, summaryCostHintEl,
+      remindersEnabled, shouldScrollSummaryCards,
       activeUser, deptUsers, impersonateEmail,
       viewMode, adminState,
 
+      // Aviso General
+      announcementConfig, showAnnouncementModal, announcementSlideIndex, announcementEditModal,
+      dismissAnnouncement, nextAnnouncementSlide, prevAnnouncementSlide, openAnnouncementConfigModal,
+      addAnnouncementSlide, removeAnnouncementSlide, saveAnnouncementConfig,
+
+      // Proveedor y Valoraciones
+      providerInfo, userMealRatings, userProviderRating, serverHour, serverTime,
+      mealRatingModal, providerRatingModal, providerResetModal, ratingsSummary,
+      canRateMeal, openMealRatingModal, saveMealRating,
+      openProviderRatingModal, saveProviderRating,
+      openProviderResetModal, saveProviderReset, loadRatingsSummary,
+
       // Acciones Principales
-      changeDate, submitOrder, cancelOrder, toggleReminders, dismissBanner, dismissSummaryCostHint, dismissCaldoMultiHint, changeProxyUser,
+      changeDate, submitOrder, cancelOrder, toggleReminders, changeProxyUser,
       toggleAdminView, loadAdminData, openChefRanking, returnToOrders, loadChefRanking, handleChefTargetTap, handleChefCakeTap, getChefTargetLabel, toggleChefGamePlay, syncChefGame,
 
       // Admin Actions

@@ -115,23 +115,27 @@
         </div>
       </div>
 
-      <!-- Banner -->
-      <div v-if="showMultiDayBanner" class="bg-gradient-to-r from-indigo-600 to-blue-600 rounded-2xl p-5 shadow-lg shadow-blue-500/20 text-white relative overflow-hidden group animate-fade-in">
-         <div class="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full blur-2xl -mr-10 -mt-10 pointer-events-none"></div>
-         <div class="flex justify-between items-start relative z-10">
-           <div class="flex gap-4">
-             <div class="w-10 h-10 bg-white/20 backdrop-blur rounded-xl flex items-center justify-center shrink-0">
-               <i class="fa-solid fa-calendar-check text-xl"></i>
-             </div>
-             <div>
-               <p class="font-bold text-lg mb-1">{{ bannerConfig.text }}</p>
-               <p class="text-blue-100 text-sm leading-relaxed max-w-lg">Ahora puedes adelantar tus pedidos para todos los días disponibles. Navega por las pestañas abajo.</p>
-             </div>
-           </div>
-           <button @click="dismissBanner" class="text-white/60 hover:text-white bg-white/0 hover:bg-white/10 rounded-lg p-2 transition-all">
-             <i class="fa-solid fa-xmark text-lg"></i>
-           </button>
-         </div>
+      <!-- Provider Rating Pill / Card -->
+      <div class="bg-gradient-to-r from-amber-500/10 via-amber-50 to-orange-50 border border-amber-200/80 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-fade-in shadow-sm">
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center font-bold text-lg shadow-sm shadow-amber-500/20 shrink-0">
+            <i class="fa-solid fa-award"></i>
+          </div>
+          <div>
+            <div class="flex items-center gap-2">
+              <span class="text-[11px] font-black uppercase tracking-wider text-amber-800">Proveedor Actual</span>
+              <span class="text-xs font-bold text-gray-800">{{ providerInfo.name }}</span>
+            </div>
+            <div class="text-xs text-gray-500 mt-0.5">
+              <span v-if="userProviderRating">Tu calificación: <span class="font-bold text-amber-600">{{ userProviderRating.puntuacion }}/5 ⭐</span> <span v-if="userProviderRating.comentario" class="italic text-gray-500">("{{ userProviderRating.comentario }}")</span></span>
+              <span v-else>¡Ayúdanos a evaluar la calidad de los alimentos y el servicio!</span>
+            </div>
+          </div>
+        </div>
+        <button @click="openProviderRatingModal()" class="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl transition-all shadow-sm shadow-amber-600/20 flex items-center gap-2 shrink-0">
+          <i class="fa-solid fa-star text-amber-200"></i>
+          {{ userProviderRating ? 'Editar Calificación' : 'Evaluar Proveedor' }}
+        </button>
       </div>
 
       <!-- Weekly Summary Dashboard -->
@@ -142,7 +146,7 @@
                   <h3 class="text-lg font-bold text-gray-900 flex items-center gap-2">
                      {{ summaryTitle }}
                   </h3>
-                  <div class="relative min-h-[92px] md:min-w-[20rem]">
+                  <div class="relative min-h-[50px]">
                      <div class="bg-emerald-50 border border-emerald-100 rounded-2xl px-4 py-3 min-w-[220px] w-fit">
                         <div class="text-[11px] font-bold uppercase tracking-[0.2em] text-emerald-700/80 mb-1">Costo acumulado</div>
                         <div class="flex items-center gap-3">
@@ -150,27 +154,6 @@
                            <span class="text-[11px] font-bold text-emerald-700 bg-white/80 border border-emerald-100 px-2 py-1 rounded-full">
                               {{ userWeeklySummary.length }} almuerzos
                            </span>
-                        </div>
-                     </div>
-                     <div
-                        v-if="showSummaryCostHint"
-                        ref="summaryCostHintEl"
-                        tabindex="-1"
-                        class="feature-hint-popover summary-cost-popover mt-3 md:mt-0"
-                     >
-                        <div class="flex items-start gap-2.5">
-                           <div class="feature-hint-badge">
-                              <i class="fa-solid fa-sparkles"></i>
-                           </div>
-                           <div class="min-w-0 flex-1">
-                              <div class="feature-hint-title">Nuevo: costo acumulado</div>
-                              <p class="feature-hint-text">
-                                 Suma el precio vigente por fecha de cada almuerzo filtrado.
-                              </p>
-                           </div>
-                           <button @click="dismissSummaryCostHint" class="feature-hint-close" title="Ocultar ayuda">
-                              <i class="fa-solid fa-xmark"></i>
-                           </button>
                         </div>
                      </div>
                   </div>
@@ -190,23 +173,50 @@
          </div>
          <div :class="['summary-cards-grid', shouldScrollSummaryCards ? 'summary-cards-grid-scroll' : '']">
          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div v-for="row in userWeeklySummary" :key="row.date" class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden hover:shadow-md transition-all">
-                <div class="bg-gray-50 px-4 py-3 border-b border-gray-100 flex justify-between items-center">
-                    <span class="font-bold text-gray-800 text-sm">{{ row.label }}</span>
-                    <div class="flex items-center gap-2">
-                       <span class="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 px-2 py-1 rounded-full">{{ formatCurrency(row.mealPrice) }}</span>
-                       <i class="fa-solid fa-circle-check text-green-500 text-sm"></i>
-                    </div>
-                </div>
-                <div class="p-4 space-y-2">
-                   <div v-for="(val, cat) in row.items" :key="cat" class="flex gap-2 items-start text-xs">
-                      <div class="w-5 h-5 rounded bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 mt-0.5">
-                         <i :class="getIconForCategory(cat)"></i>
-                      </div>
-                      <div class="text-gray-600">
-                         <span class="font-semibold text-gray-900">{{ formatCatName(cat) }}:</span> {{ formatMenuText(val) }}
+            <div v-for="row in userWeeklySummary" :key="row.date" class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden hover:shadow-md transition-all flex flex-col justify-between">
+                <div>
+                   <div class="bg-gray-50 px-4 py-3 border-b border-gray-100 flex justify-between items-center">
+                       <span class="font-bold text-gray-800 text-sm">{{ row.label }}</span>
+                       <div class="flex items-center gap-2">
+                          <span class="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 px-2 py-1 rounded-full">{{ formatCurrency(row.mealPrice) }}</span>
+                          <i class="fa-solid fa-circle-check text-green-500 text-sm"></i>
+                       </div>
+                   </div>
+                   <div class="p-4 space-y-2">
+                      <div v-for="(val, cat) in row.items" :key="cat" class="flex gap-2 items-start text-xs">
+                         <div class="w-5 h-5 rounded bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 mt-0.5">
+                            <i :class="getIconForCategory(cat)"></i>
+                         </div>
+                         <div class="text-gray-600">
+                            <span class="font-semibold text-gray-900">{{ formatCatName(cat) }}:</span> {{ formatMenuText(val) }}
+                         </div>
                       </div>
                    </div>
+                </div>
+
+                <!-- Footer de Valoración de Comida -->
+                <div class="px-4 py-2.5 bg-gray-50/80 border-t border-gray-100 flex items-center justify-between gap-2 text-xs mt-2">
+                   <template v-if="userMealRatings[row.date]">
+                      <div class="flex items-center gap-1.5 min-w-0">
+                         <div class="flex text-amber-400 text-xs">
+                            <i v-for="star in 5" :key="star" :class="star <= userMealRatings[row.date].puntuacion ? 'fa-solid fa-star' : 'fa-regular fa-star text-gray-300'"></i>
+                         </div>
+                         <span class="font-bold text-gray-700">{{ userMealRatings[row.date].puntuacion }}/5</span>
+                      </div>
+                      <button @click="openMealRatingModal(row)" class="text-blue-600 hover:text-blue-800 font-bold text-[11px] underline">
+                         Editar
+                      </button>
+                   </template>
+                   <template v-else-if="canRateMeal(row.date)">
+                      <button @click="openMealRatingModal(row)" class="w-full py-1.5 px-3 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 font-bold rounded-lg transition-colors flex items-center justify-center gap-1.5 text-xs shadow-sm">
+                         <i class="fa-solid fa-star text-amber-500"></i> Valorar almuerzo
+                      </button>
+                   </template>
+                   <template v-else>
+                      <span class="text-gray-400 text-[11px] flex items-center gap-1 italic">
+                         <i class="fa-regular fa-clock"></i> Valorar hoy desde 12:00 PM
+                      </span>
+                   </template>
                 </div>
             </div>
          </div>
@@ -396,25 +406,6 @@
                 <span v-if="isCatDisabled(cat)" class="ml-3 text-[10px] uppercase font-bold text-red-500 bg-red-50 px-2 py-1 rounded-md tracking-wide">No disponible</span>
               </h3>
 
-              <div
-                v-if="cat === 'Caldo' && showCaldoMultiHint"
-                class="feature-hint-popover caldo-hint-popover mb-4 md:mb-5"
-              >
-                 <div class="flex items-start gap-2.5">
-                    <div class="feature-hint-badge caldo-hint-badge">
-                       <i class="fa-solid fa-layer-group"></i>
-                    </div>
-                    <div class="min-w-0 flex-1">
-                       <div class="feature-hint-title">Caldo ahora es múltiple</div>
-                       <p class="feature-hint-text">
-                          Ya puedes elegir más de una opción en esta categoría.
-                       </p>
-                    </div>
-                    <button @click="dismissCaldoMultiHint" class="feature-hint-close" title="Ocultar ayuda">
-                       <i class="fa-solid fa-xmark"></i>
-                    </button>
-                 </div>
-              </div>
               <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div v-for="item in menu[cat]" :key="item.id"
                      @click="toggleItem(cat, item)"
@@ -656,10 +647,11 @@
 
          <!-- Navigation -->
          <div class="flex gap-1 border-b border-gray-200 mb-6 overflow-x-auto no-scrollbar pb-1">
-            <button v-for="tab in ['USUARIOS', 'PEDIDOS']" :key="tab"
-               @click="adminState.tab = tab"
-               :class="['px-4 py-2 font-bold text-xs rounded-t-lg border-b-2 transition-all whitespace-nowrap', adminState.tab === tab ? 'border-blue-600 text-blue-600 bg-blue-50/50' : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50']">
-               {{ tab }}
+            <button v-for="tab in ['USUARIOS', 'PEDIDOS', 'VALORACIONES']" :key="tab"
+               @click="adminState.tab = tab; if (tab === 'VALORACIONES') loadRatingsSummary();"
+               :class="['px-4 py-2 font-bold text-xs rounded-t-lg border-b-2 transition-all whitespace-nowrap flex items-center gap-1.5', adminState.tab === tab ? 'border-blue-600 text-blue-600 bg-blue-50/50' : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50']">
+               <i v-if="tab === 'VALORACIONES'" class="fa-solid fa-star text-amber-500 text-[10px]"></i>
+               <span>{{ tab }}</span>
             </button>
             <template v-if="isAdminGen">
                <button v-for="tab in ['DEPTOS', 'CONFIG', 'MENU', 'DIAS_LIBRES']" :key="tab"
@@ -764,6 +756,145 @@
              </div>
          </div>
 
+         <!-- Ratings / Valoraciones Module -->
+         <div v-if="adminState.tab === 'VALORACIONES'" class="space-y-6">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
+               <div>
+                  <h2 class="text-xl font-bold text-gray-900 flex items-center gap-2">
+                     <i class="fa-solid fa-star text-amber-500"></i> Calificaciones y Satisfacción
+                  </h2>
+                  <p class="text-xs text-gray-500 mt-1">Supervisión en tiempo real de la calidad del proveedor y de los almuerzos diarios.</p>
+               </div>
+               <div class="flex items-center gap-2">
+                  <button @click="loadRatingsSummary" class="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold rounded-xl flex items-center gap-2 transition-colors" :disabled="ratingsSummary.loading">
+                     <i :class="['fa-solid fa-rotate', ratingsSummary.loading ? 'fa-spin' : '']"></i> Actualizar
+                  </button>
+                  <button v-if="isAdminGen" @click="openProviderResetModal" class="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl flex items-center gap-2 transition-colors shadow-sm shadow-amber-600/20">
+                     <i class="fa-solid fa-arrows-rotate"></i> Cambiar Proveedor
+                  </button>
+               </div>
+            </div>
+
+            <!-- Stats Overview Grid -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+               <!-- Provider Satisfaction Card -->
+               <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-4">
+                  <div class="flex items-start justify-between">
+                     <div>
+                        <span class="text-[10px] font-black uppercase tracking-wider text-amber-700 bg-amber-50 px-2.5 py-1 rounded-full border border-amber-200/60">Proveedor Activo</span>
+                        <h3 class="text-lg font-bold text-gray-900 mt-2">{{ ratingsSummary.providerStats?.providerInfo?.name || providerInfo.name }}</h3>
+                        <p class="text-xs text-gray-400">Ciclo activo desde: {{ ratingsSummary.providerStats?.providerInfo?.periodStart || 'Reciente' }}</p>
+                     </div>
+                     <div class="text-right">
+                        <div class="text-3xl font-black text-gray-900 flex items-center justify-end gap-1">
+                           <span>{{ ratingsSummary.providerStats?.average || 0 }}</span>
+                           <span class="text-amber-400 text-2xl">★</span>
+                        </div>
+                        <p class="text-xs text-gray-500 font-medium">{{ ratingsSummary.providerStats?.total || 0 }} evaluaciones</p>
+                     </div>
+                  </div>
+
+                  <!-- Star breakdown bars -->
+                  <div class="space-y-1.5 pt-2 border-t border-gray-50">
+                     <div v-for="s in [5,4,3,2,1]" :key="s" class="flex items-center gap-2 text-xs text-gray-500">
+                        <span class="w-7 font-bold text-gray-600">{{ s }} ★</span>
+                        <div class="flex-1 bg-gray-100 h-2 rounded-full overflow-hidden">
+                           <div class="bg-amber-500 h-full rounded-full transition-all duration-500" 
+                                :style="{ width: ((ratingsSummary.providerStats?.total ? (ratingsSummary.providerStats.starsCount[s] / ratingsSummary.providerStats.total) * 100 : 0) + '%') }"></div>
+                        </div>
+                        <span class="w-8 text-right font-medium text-gray-400">{{ ratingsSummary.providerStats?.starsCount?.[s] || 0 }}</span>
+                     </div>
+                  </div>
+               </div>
+
+               <!-- Meals Satisfaction Card -->
+               <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-4">
+                  <div class="flex items-start justify-between">
+                     <div>
+                        <span class="text-[10px] font-black uppercase tracking-wider text-blue-700 bg-blue-50 px-2.5 py-1 rounded-full border border-blue-200/60">Almuerzos Servidos</span>
+                        <h3 class="text-lg font-bold text-gray-900 mt-2">Satisfacción de Comidas</h3>
+                        <p class="text-xs text-gray-400">Promedio general de valoraciones por plato</p>
+                     </div>
+                     <div class="text-right">
+                        <div class="text-3xl font-black text-gray-900 flex items-center justify-end gap-1">
+                           <span>{{ ratingsSummary.mealStats?.average || 0 }}</span>
+                           <span class="text-amber-400 text-2xl">★</span>
+                        </div>
+                        <p class="text-xs text-gray-500 font-medium">{{ ratingsSummary.mealStats?.total || 0 }} comidas calificadas</p>
+                     </div>
+                  </div>
+
+                  <!-- Star breakdown bars -->
+                  <div class="space-y-1.5 pt-2 border-t border-gray-50">
+                     <div v-for="s in [5,4,3,2,1]" :key="s" class="flex items-center gap-2 text-xs text-gray-500">
+                        <span class="w-7 font-bold text-gray-600">{{ s }} ★</span>
+                        <div class="flex-1 bg-gray-100 h-2 rounded-full overflow-hidden">
+                           <div class="bg-blue-600 h-full rounded-full transition-all duration-500" 
+                                :style="{ width: ((ratingsSummary.mealStats?.total ? (ratingsSummary.mealStats.starsCount[s] / ratingsSummary.mealStats.total) * 100 : 0) + '%') }"></div>
+                        </div>
+                        <span class="w-8 text-right font-medium text-gray-400">{{ ratingsSummary.mealStats?.starsCount?.[s] || 0 }}</span>
+                     </div>
+                  </div>
+               </div>
+            </div>
+
+            <!-- Recent Comments Dual Columns -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+               <!-- Provider Feedback List -->
+               <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-4">
+                  <h4 class="font-bold text-sm text-gray-900 flex items-center gap-2">
+                     <i class="fa-solid fa-comments text-amber-500"></i> Opiniones sobre el Proveedor
+                  </h4>
+                  <div v-if="!ratingsSummary.providerStats?.recentFeedback?.length" class="text-center py-8 text-gray-400 text-xs">
+                     No hay comentarios registrados para este período.
+                  </div>
+                  <div v-else class="space-y-3 max-h-96 overflow-y-auto pr-1">
+                     <div v-for="item in ratingsSummary.providerStats.recentFeedback" :key="item.id" class="p-3.5 bg-gray-50 rounded-xl border border-gray-100 text-xs space-y-1.5">
+                        <div class="flex justify-between items-center">
+                           <div class="font-bold text-gray-800 flex items-center gap-2">
+                              <span>{{ item.nombre }}</span>
+                              <span v-if="item.departamento" class="text-[10px] text-gray-400 font-normal">({{ item.departamento }})</span>
+                           </div>
+                           <div class="flex text-amber-400 text-xs">
+                              <i v-for="star in 5" :key="star" :class="star <= item.puntuacion ? 'fa-solid fa-star' : 'fa-regular fa-star text-gray-300'"></i>
+                           </div>
+                        </div>
+                        <p v-if="item.comentario" class="text-gray-600 italic font-normal whitespace-pre-line">"{{ item.comentario }}"</p>
+                        <div class="text-[10px] text-gray-400 flex justify-between">
+                           <span>Versión voto: v{{ item.version }}</span>
+                           <span>{{ item.fecha }}</span>
+                        </div>
+                     </div>
+                  </div>
+               </div>
+
+               <!-- Meal Feedback List -->
+               <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-4">
+                  <h4 class="font-bold text-sm text-gray-900 flex items-center gap-2">
+                     <i class="fa-solid fa-bowl-food text-blue-500"></i> Opiniones sobre Almuerzos
+                  </h4>
+                  <div v-if="!ratingsSummary.mealStats?.recentFeedback?.length" class="text-center py-8 text-gray-400 text-xs">
+                     No hay valoraciones de comidas registradas.
+                  </div>
+                  <div v-else class="space-y-3 max-h-96 overflow-y-auto pr-1">
+                     <div v-for="item in ratingsSummary.mealStats.recentFeedback" :key="item.id" class="p-3.5 bg-gray-50 rounded-xl border border-gray-100 text-xs space-y-1.5">
+                        <div class="flex justify-between items-center">
+                           <div class="font-bold text-gray-800 flex items-center gap-2">
+                              <span>{{ item.nombre }}</span>
+                              <span class="text-[10px] text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded font-bold">{{ item.fechaConsumo }}</span>
+                           </div>
+                           <div class="flex text-amber-400 text-xs">
+                              <i v-for="star in 5" :key="star" :class="star <= item.puntuacion ? 'fa-solid fa-star' : 'fa-regular fa-star text-gray-300'"></i>
+                           </div>
+                        </div>
+                        <div v-if="item.platos" class="text-[11px] text-gray-500"><span class="font-bold">Menú:</span> {{ item.platos }}</div>
+                        <p v-if="item.comentario" class="text-gray-600 italic font-normal whitespace-pre-line">"{{ item.comentario }}"</p>
+                     </div>
+                  </div>
+               </div>
+            </div>
+         </div>
+
          <!-- Depts Module (Admin Gen) -->
          <div v-if="adminState.tab === 'DEPTOS'" class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
             <div class="flex justify-between items-center mb-4">
@@ -818,6 +949,37 @@
                   <button @click="runTestDailyCloseEmails" class="bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold py-2 px-4 rounded-lg flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed" :disabled="adminState.loading">
                      <i class="fa-solid fa-paper-plane"></i> Enviar correos de prueba
                   </button>
+               </div>
+
+               <!-- Quick Management Actions: Announcement & Provider -->
+               <div class="mb-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div class="p-4 bg-indigo-50/70 border border-indigo-100 rounded-xl flex items-center justify-between gap-3">
+                     <div>
+                        <div class="text-xs font-bold text-indigo-900 flex items-center gap-1.5">
+                           <i class="fa-solid fa-bullhorn text-indigo-600"></i> Aviso General Unificado
+                        </div>
+                        <div class="text-[11px] text-indigo-700 mt-0.5">
+                           Estado: <span class="font-bold">{{ announcementConfig.enabled ? 'Activo' : 'Inactivo' }}</span> ({{ (announcementConfig.slides || []).length }} slides)
+                        </div>
+                     </div>
+                     <button @click="openAnnouncementConfigModal" type="button" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition-colors shrink-0 shadow-sm shadow-indigo-600/20">
+                        Configurar
+                     </button>
+                  </div>
+
+                  <div class="p-4 bg-amber-50/70 border border-amber-100 rounded-xl flex items-center justify-between gap-3">
+                     <div>
+                        <div class="text-xs font-bold text-amber-900 flex items-center gap-1.5">
+                           <i class="fa-solid fa-award text-amber-600"></i> Proveedor de Alimentos
+                        </div>
+                        <div class="text-[11px] text-amber-700 mt-0.5 truncate max-w-[180px]">
+                           Actual: <span class="font-bold">{{ providerInfo.name }}</span>
+                        </div>
+                     </div>
+                     <button @click="openProviderResetModal" type="button" class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition-colors shrink-0 shadow-sm shadow-amber-600/20">
+                        Gestionar
+                     </button>
+                  </div>
                </div>
 
                <!-- Customized Inputs for specific keys -->
@@ -1126,6 +1288,31 @@
                 <input v-model.number="adminState.categoryModal.data.orden" type="number" min="0" max="9999" class="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
              </div>
              <div>
+                <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Tipo de selección</label>
+                <select v-model="adminState.categoryModal.data.tipo_seleccion" class="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                   <option value="UNICA">Selección Única (1 plato)</option>
+                   <option value="MULTIPLE">Selección Múltiple (Varios platos)</option>
+                </select>
+                <p class="text-[11px] text-gray-400 mt-1">Define si el colaborador puede marcar uno o varios platos de esta categoría.</p>
+             </div>
+             <div class="pt-1">
+                <label class="flex items-center gap-2 text-xs font-bold text-gray-700 cursor-pointer">
+                   <input v-model="adminState.categoryModal.data.es_combinable" type="checkbox" class="w-4 h-4 text-blue-600 rounded">
+                   <span>¿Es combinable con otras categorías?</span>
+                </label>
+                <p class="text-[11px] text-gray-400 mt-0.5">Si está desmarcado, funcionará como categoría especial exclusiva (no permite combinar).</p>
+             </div>
+             <div v-if="adminState.categoryModal.data.es_combinable">
+                <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Combinable específicamente con</label>
+                <div class="grid grid-cols-2 gap-2 bg-gray-50 p-2.5 rounded-lg border border-gray-200 max-h-36 overflow-y-auto">
+                   <label v-for="cat in menuCategories.filter(c => c.id !== adminState.categoryModal.data.id)" :key="cat.id" class="flex items-center gap-2 text-xs text-gray-700 cursor-pointer hover:bg-white p-1 rounded">
+                      <input type="checkbox" :value="cat.id" v-model="adminState.categoryModal.data.combinable_con" class="w-3.5 h-3.5 text-blue-600 rounded">
+                      <span class="truncate">{{ cat.nombre }}</span>
+                   </label>
+                </div>
+                <p class="text-[11px] text-gray-400 mt-1">Si dejas todas desmarcadas, se combinará libremente con cualquier categoría compatible.</p>
+             </div>
+             <div>
                 <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Alias de importación</label>
                 <input v-model="adminState.categoryModal.data.aliasesText" type="text" maxlength="400" placeholder="Ej. Caldos, Sopas" class="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
                 <p class="text-[11px] text-gray-400 mt-1">Opcional. Separa varios encabezados alternativos con comas.</p>
@@ -1270,6 +1457,295 @@
         </div>
       </div>
     </footer>
+    <!-- General Announcement Modal (Slides + Cover) -->
+    <div v-if="showAnnouncementModal && announcementConfig.slides && announcementConfig.slides.length > 0" class="fixed inset-0 z-[90] flex items-center justify-center p-4">
+      <div class="absolute inset-0 bg-gray-950/70 backdrop-blur-sm transition-opacity" @click="dismissAnnouncement"></div>
+      <div class="bg-white rounded-3xl shadow-2xl w-full max-w-md relative overflow-hidden animate-fade-in-up border border-gray-100 flex flex-col max-h-[90vh]">
+        <!-- Cover Banner Header -->
+        <div class="relative bg-gradient-to-tr from-indigo-600 via-blue-600 to-indigo-800 text-white p-6 pt-7 overflow-hidden shrink-0">
+          <div class="absolute -right-8 -bottom-8 w-36 h-36 bg-white/10 rounded-full blur-2xl pointer-events-none"></div>
+          <div class="absolute -left-6 -top-6 w-28 h-28 bg-white/10 rounded-full blur-xl pointer-events-none"></div>
+          
+          <div class="flex items-center justify-between relative z-10 mb-3">
+            <span class="px-3 py-1 bg-white/20 backdrop-blur-md rounded-full text-[11px] font-extrabold uppercase tracking-wider text-white border border-white/20">
+              <i class="fa-solid fa-sparkles mr-1"></i> {{ announcementConfig.slides[announcementSlideIndex]?.badge || 'Novedad' }}
+            </span>
+            <button @click="dismissAnnouncement" class="w-8 h-8 rounded-full bg-black/20 hover:bg-black/40 text-white/80 hover:text-white flex items-center justify-center transition-all">
+              <i class="fa-solid fa-xmark text-sm"></i>
+            </button>
+          </div>
+
+          <div class="flex items-center gap-3 relative z-10">
+            <div class="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center text-2xl shadow-inner border border-white/20 shrink-0">
+              <i :class="['fa-solid', announcementConfig.slides[announcementSlideIndex]?.icon || 'fa-bullhorn']"></i>
+            </div>
+            <div>
+              <h2 class="text-xl font-black tracking-tight text-white leading-tight">
+                {{ announcementConfig.slides[announcementSlideIndex]?.title || 'Aviso Importante' }}
+              </h2>
+            </div>
+          </div>
+        </div>
+
+        <!-- Slide Body -->
+        <div class="p-6 overflow-y-auto flex-1 space-y-4">
+          <p class="text-gray-600 text-sm leading-relaxed whitespace-pre-line">
+            {{ announcementConfig.slides[announcementSlideIndex]?.description }}
+          </p>
+        </div>
+
+        <!-- Carousel Navigation / Footer -->
+        <div class="px-6 py-4 bg-gray-50 border-t border-gray-100 flex items-center justify-between shrink-0">
+          <!-- Dots -->
+          <div class="flex items-center gap-1.5" v-if="announcementConfig.slides.length > 1">
+            <span v-for="(slide, idx) in announcementConfig.slides" :key="idx" 
+                  :class="['h-2 rounded-full transition-all duration-300', idx === announcementSlideIndex ? 'w-6 bg-blue-600' : 'w-2 bg-gray-300']"></span>
+          </div>
+          <div v-else></div>
+
+          <div class="flex items-center gap-2">
+            <button v-if="announcementSlideIndex > 0" @click="prevAnnouncementSlide" class="px-3 py-2 text-xs font-bold text-gray-500 hover:text-gray-800 hover:bg-gray-200 rounded-xl transition-all">
+              Anterior
+            </button>
+            <button @click="nextAnnouncementSlide" class="px-5 py-2 text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-md shadow-blue-500/20 transition-all flex items-center gap-1.5">
+              <span>{{ announcementSlideIndex === announcementConfig.slides.length - 1 ? 'Entendido' : 'Siguiente' }}</span>
+              <i v-if="announcementSlideIndex < announcementConfig.slides.length - 1" class="fa-solid fa-chevron-right text-[10px]"></i>
+              <i v-else class="fa-solid fa-check text-[10px]"></i>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Meal Rating Modal -->
+    <div v-if="mealRatingModal.open" class="fixed inset-0 z-[80] flex items-center justify-center p-4">
+      <div class="absolute inset-0 bg-gray-900/60 backdrop-blur-sm" @click="mealRatingModal.open = false"></div>
+      <div class="bg-white rounded-3xl shadow-2xl w-full max-w-md relative overflow-hidden animate-fade-in-up border border-gray-100">
+        <div class="px-6 py-4 bg-gradient-to-r from-amber-500 to-orange-500 text-white flex justify-between items-center">
+          <div class="flex items-center gap-2.5">
+            <i class="fa-solid fa-utensils text-amber-200 text-lg"></i>
+            <div>
+              <h3 class="font-bold text-base text-white">Valorar tu almuerzo</h3>
+              <p class="text-xs text-amber-100">{{ mealRatingModal.dateLabel }}</p>
+            </div>
+          </div>
+          <button @click="mealRatingModal.open = false" class="text-white/80 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+
+        <div class="p-6 space-y-5">
+          <div v-if="mealRatingModal.dishes" class="p-3 bg-gray-50 rounded-xl border border-gray-100 text-xs text-gray-600">
+            <span class="font-bold text-gray-800">Platos ordenados:</span> {{ mealRatingModal.dishes }}
+          </div>
+
+          <div class="text-center space-y-2">
+            <label class="block text-xs font-bold uppercase tracking-wider text-gray-500">¿Qué tal estuvo la comida?</label>
+            <div class="flex justify-center items-center gap-2 pt-1">
+              <button v-for="star in 5" :key="star" type="button" @click="mealRatingModal.rating = star" class="text-3xl transition-transform hover:scale-125 focus:outline-none">
+                <i :class="star <= mealRatingModal.rating ? 'fa-solid fa-star text-amber-400' : 'fa-regular fa-star text-gray-300 hover:text-amber-200'"></i>
+              </button>
+            </div>
+            <p class="text-xs font-bold text-amber-600">
+              {{ ['Muy mala', 'Regular', 'Aceptable', 'Muy buena', 'Excelente'][mealRatingModal.rating - 1] }}
+            </p>
+          </div>
+
+          <div>
+            <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Comentario u opinión (opcional)</label>
+            <textarea v-model="mealRatingModal.comment" rows="3" maxlength="500" placeholder="¿Qué te gustó? ¿Algo que mejorar en el sabor o porción?" class="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm focus:ring-2 focus:ring-amber-500 outline-none resize-none"></textarea>
+            <div class="text-[11px] text-gray-400 text-right">{{ (mealRatingModal.comment || '').length }}/500</div>
+          </div>
+
+          <div v-if="mealRatingModal.error" class="p-3 bg-red-50 text-red-600 text-xs font-bold rounded-xl border border-red-100 flex items-center gap-2">
+            <i class="fa-solid fa-circle-exclamation"></i>
+            <span>{{ mealRatingModal.error }}</span>
+          </div>
+        </div>
+
+        <div class="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3">
+          <button @click="mealRatingModal.open = false" class="px-4 py-2 text-xs font-bold text-gray-500 hover:bg-gray-200 rounded-xl transition-all" :disabled="mealRatingModal.saving">Cancelar</button>
+          <button @click="saveMealRating" class="px-5 py-2 text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white rounded-xl shadow-md shadow-amber-500/20 transition-all flex items-center gap-2 disabled:opacity-50" :disabled="mealRatingModal.saving">
+            <i v-if="mealRatingModal.saving" class="fa-solid fa-circle-notch fa-spin"></i>
+            Guardar Valoración
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Provider Rating Modal -->
+    <div v-if="providerRatingModal.open" class="fixed inset-0 z-[80] flex items-center justify-center p-4">
+      <div class="absolute inset-0 bg-gray-900/60 backdrop-blur-sm" @click="providerRatingModal.open = false"></div>
+      <div class="bg-white rounded-3xl shadow-2xl w-full max-w-md relative overflow-hidden animate-fade-in-up border border-gray-100">
+        <div class="px-6 py-4 bg-gradient-to-r from-amber-600 to-orange-600 text-white flex justify-between items-center">
+          <div class="flex items-center gap-2.5">
+            <i class="fa-solid fa-award text-amber-200 text-lg"></i>
+            <div>
+              <h3 class="font-bold text-base text-white">Calificar al Proveedor</h3>
+              <p class="text-xs text-amber-100">{{ providerInfo.name }}</p>
+            </div>
+          </div>
+          <button @click="providerRatingModal.open = false" class="text-white/80 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+
+        <div class="p-6 space-y-5">
+          <p class="text-xs text-gray-500 leading-relaxed">
+            Tu opinión nos ayuda a supervisar la calidad del servicio contratado. Puedes actualizar tu calificación cuantas veces quieras a lo largo del tiempo.
+          </p>
+
+          <div class="text-center space-y-2">
+            <label class="block text-xs font-bold uppercase tracking-wider text-gray-500">Satisfacción general con el proveedor</label>
+            <div class="flex justify-center items-center gap-2 pt-1">
+              <button v-for="star in 5" :key="star" type="button" @click="providerRatingModal.rating = star" class="text-3xl transition-transform hover:scale-125 focus:outline-none">
+                <i :class="star <= providerRatingModal.rating ? 'fa-solid fa-star text-amber-400' : 'fa-regular fa-star text-gray-300 hover:text-amber-200'"></i>
+              </button>
+            </div>
+            <p class="text-xs font-bold text-amber-600">
+              {{ ['Muy Insatisfecho', 'Insatisfecho', 'Neutral / Regular', 'Satisfecho', 'Muy Satisfecho'][providerRatingModal.rating - 1] }}
+            </p>
+          </div>
+
+          <div>
+            <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Comentario o sugerencia (opcional)</label>
+            <textarea v-model="providerRatingModal.comment" rows="3" maxlength="500" placeholder="Comenta sobre la puntualidad, higiene, variedad o sazón general..." class="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm focus:ring-2 focus:ring-amber-500 outline-none resize-none"></textarea>
+            <div class="text-[11px] text-gray-400 text-right">{{ (providerRatingModal.comment || '').length }}/500</div>
+          </div>
+
+          <div v-if="providerRatingModal.error" class="p-3 bg-red-50 text-red-600 text-xs font-bold rounded-xl border border-red-100 flex items-center gap-2">
+            <i class="fa-solid fa-circle-exclamation"></i>
+            <span>{{ providerRatingModal.error }}</span>
+          </div>
+        </div>
+
+        <div class="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3">
+          <button @click="providerRatingModal.open = false" class="px-4 py-2 text-xs font-bold text-gray-500 hover:bg-gray-200 rounded-xl transition-all" :disabled="providerRatingModal.saving">Cancelar</button>
+          <button @click="saveProviderRating" class="px-5 py-2 text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white rounded-xl shadow-md shadow-amber-500/20 transition-all flex items-center gap-2 disabled:opacity-50" :disabled="providerRatingModal.saving">
+            <i v-if="providerRatingModal.saving" class="fa-solid fa-circle-notch fa-spin"></i>
+            Guardar Calificación
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Provider Reset Modal (Admin) -->
+    <div v-if="providerResetModal.open" class="fixed inset-0 z-[80] flex items-center justify-center p-4">
+      <div class="absolute inset-0 bg-gray-900/60 backdrop-blur-sm" @click="providerResetModal.open = false"></div>
+      <div class="bg-white rounded-3xl shadow-2xl w-full max-w-md relative overflow-hidden animate-fade-in-up border border-gray-100">
+        <div class="px-6 py-4 bg-gray-900 text-white flex justify-between items-center">
+          <div class="flex items-center gap-2.5">
+            <i class="fa-solid fa-arrows-rotate text-blue-400"></i>
+            <h3 class="font-bold text-base text-white">Cambiar Proveedor / Reiniciar Votos</h3>
+          </div>
+          <button @click="providerResetModal.open = false" class="text-white/80 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+
+        <div class="p-6 space-y-4">
+          <p class="text-xs text-gray-600 leading-relaxed">
+            Al cambiar el proveedor o iniciar un nuevo ciclo, se creará un nuevo período de evaluación. Las valoraciones anteriores quedarán archivadas en el historial.
+          </p>
+
+          <div>
+            <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Nombre del nuevo proveedor</label>
+            <input v-model="providerResetModal.providerName" type="text" maxlength="100" placeholder="Ej. Delicias Gourmet SRL" class="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+          </div>
+
+          <div v-if="providerResetModal.error" class="p-3 bg-red-50 text-red-600 text-xs font-bold rounded-xl border border-red-100 flex items-center gap-2">
+            <i class="fa-solid fa-circle-exclamation"></i>
+            <span>{{ providerResetModal.error }}</span>
+          </div>
+        </div>
+
+        <div class="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3">
+          <button @click="providerResetModal.open = false" class="px-4 py-2 text-xs font-bold text-gray-500 hover:bg-gray-200 rounded-xl transition-all" :disabled="providerResetModal.saving">Cancelar</button>
+          <button @click="saveProviderReset" class="px-5 py-2 text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-md shadow-blue-500/20 transition-all flex items-center gap-2 disabled:opacity-50" :disabled="providerResetModal.saving">
+            <i v-if="providerResetModal.saving" class="fa-solid fa-circle-notch fa-spin"></i>
+            Iniciar Nuevo Período
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Announcement Config Modal (Admin) -->
+    <div v-if="announcementEditModal.open" class="fixed inset-0 z-[80] flex items-center justify-center p-4">
+      <div class="absolute inset-0 bg-gray-900/60 backdrop-blur-sm" @click="announcementEditModal.open = false"></div>
+      <div class="bg-white rounded-3xl shadow-2xl w-full max-w-lg relative overflow-hidden animate-fade-in-up border border-gray-100 flex flex-col max-h-[90vh]">
+        <div class="px-6 py-4 bg-indigo-700 text-white flex justify-between items-center shrink-0">
+          <div class="flex items-center gap-2.5">
+            <i class="fa-solid fa-bullhorn text-indigo-200"></i>
+            <h3 class="font-bold text-base text-white">Configurar Aviso General</h3>
+          </div>
+          <button @click="announcementEditModal.open = false" class="text-white/80 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+
+        <div class="p-6 overflow-y-auto space-y-5 flex-1">
+          <div class="flex items-center justify-between p-3 bg-indigo-50/70 border border-indigo-100 rounded-2xl">
+            <div>
+              <div class="font-bold text-xs text-indigo-950">Estado del aviso</div>
+              <div class="text-[11px] text-indigo-700">Habilita o deshabilita la visualización del aviso general.</div>
+            </div>
+            <input v-model="announcementEditModal.enabled" type="checkbox" class="w-5 h-5 text-indigo-600 rounded">
+          </div>
+
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Fecha de Expiración</label>
+              <input v-model="announcementEditModal.expiresOn" type="date" class="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none">
+            </div>
+            <div>
+              <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Máx. Veces Cierre</label>
+              <input v-model.number="announcementEditModal.maxDismiss" type="number" min="1" max="100" class="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none">
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <input id="forceNewId" v-model="announcementEditModal.forceNewId" type="checkbox" class="w-4 h-4 text-indigo-600 rounded">
+            <label for="forceNewId" class="text-xs font-bold text-gray-700 cursor-pointer">Forzar que todos los usuarios lo vean de nuevo (Nuevo ID)</label>
+          </div>
+
+          <!-- Slides Editor -->
+          <div class="space-y-4 pt-2">
+            <div class="flex justify-between items-center">
+              <label class="block text-xs font-bold text-gray-700 uppercase tracking-wider">Slides del Aviso ({{ announcementEditModal.slides.length }})</label>
+              <button @click="addAnnouncementSlide" type="button" class="px-3 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold flex items-center gap-1">
+                <i class="fa-solid fa-plus text-[10px]"></i> Agregar Slide
+              </button>
+            </div>
+
+            <div v-for="(slide, sIdx) in announcementEditModal.slides" :key="sIdx" class="p-4 bg-gray-50 rounded-2xl border border-gray-200/80 space-y-3 relative group">
+              <div class="flex justify-between items-center">
+                <span class="text-xs font-black text-gray-500 uppercase tracking-wider">Slide #{{ sIdx + 1 }}</span>
+                <button v-if="announcementEditModal.slides.length > 1" @click="removeAnnouncementSlide(sIdx)" type="button" class="text-red-500 hover:text-red-700 text-xs font-bold">
+                  <i class="fa-solid fa-trash-can"></i>
+                </button>
+              </div>
+
+              <div class="grid grid-cols-3 gap-3">
+                <div class="col-span-2">
+                  <label class="block text-[11px] font-bold text-gray-500 uppercase mb-1">Título</label>
+                  <input v-model="slide.title" type="text" placeholder="Ej. ¡Nueva función de votaciones!" class="w-full bg-white border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div>
+                  <label class="block text-[11px] font-bold text-gray-500 uppercase mb-1">Badge</label>
+                  <input v-model="slide.badge" type="text" placeholder="Ej. ¡Novedad!" class="w-full bg-white border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+              </div>
+
+              <div>
+                <label class="block text-[11px] font-bold text-gray-500 uppercase mb-1">Descripción</label>
+                <textarea v-model="slide.description" rows="3" placeholder="Detalla aquí la información que deseas comunicar..." class="w-full bg-white border border-gray-200 rounded-lg p-2.5 text-xs outline-none focus:ring-2 focus:ring-indigo-500 resize-none"></textarea>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3 shrink-0">
+          <button @click="announcementEditModal.open = false" class="px-4 py-2 text-xs font-bold text-gray-500 hover:bg-gray-200 rounded-xl transition-all" :disabled="announcementEditModal.saving">Cancelar</button>
+          <button @click="saveAnnouncementConfig" class="px-5 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl shadow-md shadow-indigo-500/20 transition-all flex items-center gap-2 disabled:opacity-50" :disabled="announcementEditModal.saving">
+            <i v-if="announcementEditModal.saving" class="fa-solid fa-circle-notch fa-spin"></i>
+            Guardar Aviso
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- Generic Message Modal -->
     <div v-if="msgModal.open" class="fixed inset-0 z-[100] flex items-center justify-center p-4">
        <div class="absolute inset-0 bg-gray-900/60 backdrop-blur-sm" @click="closeMsgModal"></div>
