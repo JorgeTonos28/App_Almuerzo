@@ -201,7 +201,7 @@ createApp({
        menuDate: '',
        menuItems: [],
        menuModal: { open: false, isNew: true, data: {} },
-       categoryManagerModal: { open: false },
+       categoryManagerModal: { open: false, view: 'LIST' },
        categoryModal: { open: false, isNew: true, data: { combinable_con: [] } },
        // Menu Import
        menuImportModal: { open: false, step: 1, weekStart: '', text: '', preview: [], error: null },
@@ -1739,11 +1739,12 @@ createApp({
              combinable_con: [],
              tipo_seleccion: 'UNICA'
            };
-       adminState.categoryModal.open = true;
+       adminState.categoryManagerModal.open = true;
+       adminState.categoryManagerModal.view = 'FORM';
     };
 
     const openCategoryManager = () => {
-       adminState.categoryManagerModal.open = true;
+       adminState.categoryManagerModal = { open: true, view: 'LIST' };
     };
 
     const saveMenuCategory = () => {
@@ -1756,7 +1757,7 @@ createApp({
             if (!res.ok) return showModal(res.msg || 'No se pudo guardar la categoria.', 'Error');
             menuCategories.value = res.categories || menuCategories.value;
             adminState.menuCategories = res.categories || adminState.menuCategories;
-            adminState.categoryModal.open = false;
+            adminState.categoryManagerModal.view = 'LIST';
          })
          .withFailureHandler(err => {
             adminState.loading = false;
