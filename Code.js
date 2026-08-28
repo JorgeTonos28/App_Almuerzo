@@ -1,7 +1,7 @@
 /**
  * Code.gs - Backend V5 (Refactor & New Features)
  */
-const APP_VERSION = 'v7.31';
+const APP_VERSION = 'v7.32';
 const SPREADSHEET_RETRY_ATTEMPTS = 4;
 const SPREADSHEET_RETRY_DELAY_MS = 1500;
 const CHEF_GAME_DAILY_LIMIT_SECONDS = 15 * 60;
