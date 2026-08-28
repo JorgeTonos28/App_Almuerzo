@@ -113,6 +113,12 @@ Detalles:
 - El parser de importación semanal procesa de forma segura texto tabulado de Excel (TSV) respetando saltos de línea internos en celdas con comillas y omitiendo comillas dobles residuales.
 - Las validaciones de integridad se ejecutan tanto en frontend en tiempo real como en backend antes de persistir pedidos.
 
+- Sistema de votaciones y valoraciones:
+  - Valoración de comidas diarias (1 a 5 estrellas con comentario, disponible a partir de las 12:00 PM del mismo día o días posteriores).
+  - Valoración del proveedor de alimentos activo (1 a 5 estrellas con comentarios, actualizable en el tiempo con historial de auditoría).
+  - Módulo de satisfacción de la comunidad para colaboradores: botón "Ver Satisfacción" que permite ver el promedio general del proveedor, satisfacción de comidas, distribución de estrellas y los 5 últimos comentarios de cada categoría.
+  - Panel administrativo de satisfacción con métricas KPI, distribución de estrellas y listado de opiniones.
+
 ## Despliegue
 
 1. Ejecuta `clasp push` para subir los archivos al proyecto de Apps Script.
@@ -120,6 +126,6 @@ Detalles:
 
 ## Versionado
 
-- Versión actual: `v7.35`.
+- Versión actual: `v7.36`.
 - Todo cambio funcional debe incrementar `APP_VERSION` en `Code.js`.
 - Sigue siempre las reglas operativas de `AGENTS.md`.

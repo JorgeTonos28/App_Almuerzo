@@ -1,7 +1,7 @@
 /**
  * Code.gs - Backend V5 (Refactor & New Features)
  */
-const APP_VERSION = 'v7.35';
+const APP_VERSION = 'v7.36';
 const SPREADSHEET_RETRY_ATTEMPTS = 4;
 const SPREADSHEET_RETRY_DELAY_MS = 1500;
 const CHEF_GAME_DAILY_LIMIT_SECONDS = 15 * 60;
@@ -1091,9 +1091,9 @@ function apiResetProviderPeriod(payload) {
 
 function apiGetRatingsSummary() {
   try {
-    const admin = getUserInfo_();
-    if (!admin || (admin.rol !== 'ADMIN_GEN' && admin.rol !== 'ADMIN_DEP')) {
-      throw new Error("Permiso denegado.");
+    const user = getUserInfo_();
+    if (!user || user.estado !== 'ACTIVO') {
+      throw new Error("Debes iniciar sesión para consultar las valoraciones.");
     }
 
     ensureRatingsSheets_();

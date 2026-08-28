@@ -44,6 +44,7 @@ createApp({
     const providerRatingModal = ref({ open: false, rating: 5, comment: '', saving: false, error: null });
     const providerResetModal = ref({ open: false, providerName: '', saving: false, error: null });
     const ratingsSummary = ref({ providerStats: null, mealStats: null, loading: false });
+    const satisfactionCommunityModal = ref({ open: false, activeTab: 'PROVIDER', loading: false, data: null });
     const chefGameState = ref({
       score: 0,
       remainingSeconds: 900,
@@ -2278,6 +2279,26 @@ createApp({
         .apiGetRatingsSummary();
     };
 
+    const openSatisfactionCommunityModal = (tab = 'PROVIDER') => {
+      satisfactionCommunityModal.value.activeTab = tab;
+      satisfactionCommunityModal.value.open = true;
+      satisfactionCommunityModal.value.loading = true;
+      google.script.run
+        .withSuccessHandler(res => {
+          satisfactionCommunityModal.value.loading = false;
+          if (res.ok) {
+            satisfactionCommunityModal.value.data = res;
+          } else {
+            showModal(res.msg || 'No se pudieron cargar las métricas de satisfacción.', 'Satisfacción');
+          }
+        })
+        .withFailureHandler(err => {
+          satisfactionCommunityModal.value.loading = false;
+          showModal(err.message || 'Error de conexión al cargar satisfacción.', 'Error');
+        })
+        .apiGetRatingsSummary();
+    };
+
     const submitOrder = () => {
       if (hasBlockingErrors.value) return;
       
@@ -2487,6 +2508,7 @@ createApp({
       // Proveedor y Valoraciones
       providerInfo, userMealRatings, userProviderRating, serverHour, serverTime,
       mealRatingModal, providerRatingModal, providerResetModal, ratingsSummary,
+      satisfactionCommunityModal, openSatisfactionCommunityModal,
       canRateMeal, openMealRatingModal, saveMealRating,
       openProviderRatingModal, saveProviderRating,
       openProviderResetModal, saveProviderReset, loadRatingsSummary,
