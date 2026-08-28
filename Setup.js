@@ -279,3 +279,71 @@ function populateSampleData_(ss){
     mSh.getRange(2, 1, items.length, 6).setValues(items);
   }
 }
+
+const DEFAULT_MENU_CATEGORIES = [
+  ['Arroces', 'Arroces', 10, 'ACTIVO', '', 'SI', 'Granos, Carnes, Ensaladas, Frituritas', 'UNICA'],
+  ['Granos', 'Granos', 20, 'ACTIVO', 'Legumbres, Habichuelas', 'SI', 'Arroces, Carnes, Ensaladas, Frituritas', 'UNICA'],
+  ['Carnes', 'Carnes', 30, 'ACTIVO', 'Proteinas, Carnes y Pescados', 'SI', 'Arroces, Granos, Ensaladas, Viveres, Frituritas', 'UNICA'],
+  ['Ensaladas', 'Ensaladas', 40, 'ACTIVO', 'Guarnición, Guarnición / Ensalada', 'SI', 'Arroces, Granos, Carnes, Viveres, Frituritas', 'UNICA'],
+  ['Viveres', 'Viveres', 50, 'ACTIVO', 'Víveres, Tuberculos', 'SI', 'Carnes, Ensaladas, Frituritas', 'UNICA'],
+  ['Vegetariana', 'Vegetariana', 60, 'ACTIVO', 'Vegetariano, Veggie, Menú Vegetariano', 'NO', '', 'UNICA'],
+  ['Caldo', 'Caldo', 70, 'ACTIVO', 'Caldos, Sopas, Sopa', 'NO', '', 'MULTIPLE'],
+  ['Opcion_Rapida', 'Opcion Rapida', 80, 'ACTIVO', 'Opción Rápida, Rapida, Sandwich, Dieta', 'NO', '', 'UNICA'],
+  ['Frituritas', 'Frituritas', 90, 'ACTIVO', 'Frituras, Fritos, Snack', 'SI', 'Arroces, Granos, Carnes, Ensaladas, Viveres', 'UNICA']
+];
+
+function ensureDefaultMenuCategories_(sheet) {
+  if (!sheet) return;
+  const data = sheet.getDataRange().getValues();
+  if (data.length <= 1) {
+    sheet.getRange(2, 1, DEFAULT_MENU_CATEGORIES.length, 8).setValues(DEFAULT_MENU_CATEGORIES);
+    return;
+  }
+
+  const existingMap = {};
+  for (let i = 1; i < data.length; i++) {
+    const id = String(data[i][0] || '').trim();
+    if (id) existingMap[id] = { rowIdx: i + 1, row: data[i] };
+  }
+
+  const defaultDict = {};
+  DEFAULT_MENU_CATEGORIES.forEach(cat => {
+    defaultDict[cat[0]] = cat;
+  });
+
+  // 1. Backfill missing or empty constraint columns for existing categories
+  Object.keys(existingMap).forEach(id => {
+    const info = existingMap[id];
+    const def = defaultDict[id];
+    if (def) {
+      let needsUpdate = false;
+      const rowVals = [...info.row];
+      while (rowVals.length < 8) rowVals.push('');
+
+      if (!String(rowVals[5] || '').trim()) {
+        rowVals[5] = def[5];
+        needsUpdate = true;
+      }
+      if (!String(rowVals[6] || '').trim() && def[6]) {
+        rowVals[6] = def[6];
+        needsUpdate = true;
+      }
+      if (!String(rowVals[7] || '').trim()) {
+        rowVals[7] = def[7];
+        needsUpdate = true;
+      }
+
+      if (needsUpdate) {
+        sheet.getRange(info.rowIdx, 1, 1, 8).setValues([[
+          rowVals[0], rowVals[1], rowVals[2], rowVals[3], rowVals[4], rowVals[5], rowVals[6], rowVals[7]
+        ]]);
+      }
+    }
+  });
+
+  // 2. Append missing default categories
+  const missing = DEFAULT_MENU_CATEGORIES.filter(category => !existingMap[category[0]]);
+  if (missing.length > 0) {
+    sheet.getRange(sheet.getLastRow() + 1, 1, missing.length, 8).setValues(missing);
+  }
+}

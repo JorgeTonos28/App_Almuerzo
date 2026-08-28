@@ -120,6 +120,6 @@ Detalles:
 
 ## Versionado
 
-- Versión actual: `v7.33`.
+- Versión actual: `v7.34`.
 - Todo cambio funcional debe incrementar `APP_VERSION` en `Code.js`.
 - Sigue siempre las reglas operativas de `AGENTS.md`.
