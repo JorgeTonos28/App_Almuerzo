@@ -1302,10 +1302,10 @@
                 </label>
                 <p class="text-[11px] text-gray-400 mt-0.5">Si está desmarcado, funcionará como categoría especial exclusiva (no permite combinar).</p>
              </div>
-             <div v-if="adminState.categoryModal.data.es_combinable">
+             <div v-if="adminState.categoryModal.data && adminState.categoryModal.data.es_combinable">
                 <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Combinable específicamente con</label>
                 <div class="grid grid-cols-2 gap-2 bg-gray-50 p-2.5 rounded-lg border border-gray-200 max-h-36 overflow-y-auto">
-                   <label v-for="cat in menuCategories.filter(c => c.id !== adminState.categoryModal.data.id)" :key="cat.id" class="flex items-center gap-2 text-xs text-gray-700 cursor-pointer hover:bg-white p-1 rounded">
+                   <label v-for="cat in (menuCategories || adminState.menuCategories || []).filter(c => c && c.id !== adminState.categoryModal.data?.id)" :key="cat.id" class="flex items-center gap-2 text-xs text-gray-700 cursor-pointer hover:bg-white p-1 rounded">
                       <input type="checkbox" :value="cat.id" v-model="adminState.categoryModal.data.combinable_con" class="w-3.5 h-3.5 text-blue-600 rounded">
                       <span class="truncate">{{ cat.nombre }}</span>
                    </label>

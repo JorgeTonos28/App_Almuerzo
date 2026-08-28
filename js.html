@@ -202,7 +202,7 @@ createApp({
        menuItems: [],
        menuModal: { open: false, isNew: true, data: {} },
        categoryManagerModal: { open: false },
-       categoryModal: { open: false, isNew: true, data: {} },
+       categoryModal: { open: false, isNew: true, data: { combinable_con: [] } },
        // Menu Import
        menuImportModal: { open: false, step: 1, weekStart: '', text: '', preview: [], error: null },
        // Holiday Editor
@@ -2464,7 +2464,7 @@ createApp({
       chefGameState, chefGame, chefRanking,
       
       // Computed
-      isAdmin, isDeptAdmin, isAdminGen, isTestEmailMode, menuLoaded, categories, activeMenuCategories, adminMenuCategories,
+      isAdmin, isDeptAdmin, isAdminGen, isTestEmailMode, menuLoaded, categories, menuCategories, activeMenuCategories, adminMenuCategories,
       selectedCount, validationError, hasBlockingErrors, showGrainWarning,
       isDefaultSummary,
       displayDate, isCutoffPassed,
