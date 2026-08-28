@@ -37,7 +37,7 @@ function setupSheetsAndConfig(){
     },
     {
       name: 'CategoriasMenu',
-      headers: ['id', 'nombre', 'orden', 'estado', 'alias_importacion']
+      headers: ['id', 'nombre', 'orden', 'estado', 'alias_importacion', 'es_combinable', 'combinable_con', 'tipo_seleccion']
     },
     {
       name: 'Pedidos', 
@@ -48,6 +48,27 @@ function setupSheetsAndConfig(){
         'estado',            // ACTIVO, CANCELADO
         'timestamp_modificacion',
         'creado_por'         // Email de quien realizó la acción (trazabilidad proxy)
+      ]
+    },
+    {
+      name: 'ValoracionesComida',
+      headers: [
+        'id', 'pedido_id', 'fecha_consumo', 'email_usuario', 'nombre_usuario', 'departamento',
+        'puntuacion', 'comentario', 'platos_resumen', 'timestamp_creacion', 'timestamp_actualizacion'
+      ]
+    },
+    {
+      name: 'ValoracionesProveedor',
+      headers: [
+        'id', 'proveedor_periodo_id', 'proveedor_nombre', 'email_usuario', 'nombre_usuario', 'departamento',
+        'puntuacion', 'comentario', 'version_voto', 'timestamp_creacion', 'timestamp_actualizacion'
+      ]
+    },
+    {
+      name: 'HistoricoValoracionesProveedor',
+      headers: [
+        'id', 'proveedor_periodo_id', 'proveedor_nombre', 'email_usuario', 'nombre_usuario', 'departamento',
+        'puntuacion', 'comentario', 'timestamp'
       ]
     },
     {
@@ -160,7 +181,27 @@ function ensureBackupFolder_(configSheet) {
 
 function populateDefaultConfig_(sheet){
   if (!sheet || sheet.getLastRow() > 1) return;
-  const hintExpiry = Utilities.formatDate(new Date(Date.now() + (30 * 24 * 60 * 60 * 1000)), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  const defaultExpiry = Utilities.formatDate(new Date(Date.now() + (30 * 24 * 60 * 60 * 1000)), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  const todayStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  const defaultAnnouncementPayload = JSON.stringify({
+    slides: [
+      {
+        badge: "¡Novedad!",
+        title: "Nuevo Sistema de Valoraciones",
+        description: "Ahora puedes calificar tus comidas a partir de las 12:00 PM y valorar al proveedor de alimentos general.",
+        icon: "fa-star",
+        theme: "amber"
+      },
+      {
+        badge: "Tu Opinión Cuenta",
+        title: "Evalúa al Proveedor de Alimentos",
+        description: "Califica y comenta el servicio del proveedor cuando quieras para ayudarnos a mantener y mejorar la calidad.",
+        icon: "fa-award",
+        theme: "indigo"
+      }
+    ]
+  });
+
   const defaults = [
     ['HORA_ENVIO', '15:00', 'Hora militar envío reportes a responsables (HH:MM)'],
     ['MINUTOS_PREV_CIERRE', '30', 'Minutos antes del envío para cerrar pedidos'],
@@ -173,12 +214,14 @@ function populateDefaultConfig_(sheet){
     ['TEST_EMAIL_MODE', 'FALSE', 'Si es TRUE, todos los correos van a la dirección de prueba'],
     ['TEST_EMAIL_DEST', '', 'Correo de destino para modo de prueba'],
     ['RESPONSIBLES_EMAILS_JSON', '[]', 'JSON de correos externos en copia para el resumen diario general.'],
-    ['PLAN_WEEK_TEXT', '¡Planifica tu semana! Ahora puedes adelantar tus pedidos para todos los días disponibles.', 'Texto del banner de planificación'],
-    ['PLAN_WEEK_LIMIT', '5', 'Número de veces que se mostrará el banner al usuario'],
-    ['SUMMARY_COST_HINT_LIMIT', '3', 'Cantidad maxima de cierres del hint del costo acumulado antes de ocultarlo.'],
-    ['SUMMARY_COST_HINT_EXPIRES_ON', hintExpiry, 'Fecha limite para mostrar el hint del costo acumulado (YYYY-MM-DD).'],
-    ['CALDO_MULTI_HINT_LIMIT', '3', 'Cantidad maxima de cierres del hint de multiseleccion en Caldo.'],
-    ['CALDO_MULTI_HINT_EXPIRES_ON', hintExpiry, 'Fecha limite para mostrar el hint de multiseleccion en Caldo (YYYY-MM-DD).'],
+    ['ANNOUNCEMENT_ENABLED', 'TRUE', 'Indica si el aviso general está activo para los usuarios (TRUE/FALSE)'],
+    ['ANNOUNCEMENT_ID', 'anuncio_v7_31_valoraciones', 'Identificador único del aviso activo. Al cambiarlo, todos los usuarios volverán a verlo.'],
+    ['ANNOUNCEMENT_EXPIRES_ON', defaultExpiry, 'Fecha límite para mostrar el aviso general (YYYY-MM-DD)'],
+    ['ANNOUNCEMENT_MAX_DISMISS', '3', 'Cantidad máxima de veces que el usuario puede cerrar el aviso antes de que no aparezca más.'],
+    ['ANNOUNCEMENT_PAYLOAD_JSON', defaultAnnouncementPayload, 'Contenido en formato JSON de los slides del aviso general.'],
+    ['PROVIDER_NAME', 'Proveedor de Alimentos', 'Nombre del proveedor de alimentos activo.'],
+    ['PROVIDER_PERIOD_ID', 'PROV_2026_01', 'Identificador del ciclo/período de evaluación del proveedor actual.'],
+    ['PROVIDER_PERIOD_START', todayStr, 'Fecha de inicio del ciclo del proveedor actual (YYYY-MM-DD).'],
     ['MEAL_PRICE_CURRENT', '57', 'Costo actual por almuerzo. Al cambiarlo se conserva historial automatico por fecha.'],
     ['MEAL_PRICE_HISTORY_JSON', '[{"from":"1900-01-01","price":57}]', 'Historial auto-administrado del costo por almuerzo. No editar manualmente.'],
     ['MENU_DAY_ENDPOINT_TOKEN', generateSecretToken_(), 'Token secreto para consumir el endpoint JSON de menu por fecha. Generar y compartir solo con TI.'],
