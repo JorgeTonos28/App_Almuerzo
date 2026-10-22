@@ -102,6 +102,9 @@ Detalles:
 - Si `MENU_DAY_ENDPOINT_TOKEN` esta vacio, el endpoint queda deshabilitado.
 - La respuesta incluye solo platos habilitados (`habilitado = SI`) de la hoja `Menu`.
 - El endpoint devuelve JSON con `ok`, `fecha`, `date`, `label`, `existeMenu`, `exists`, `menu`, `items`, `appVersion` y `generadoEn`.
+- Desde v7.38, las claves de `menu` y `items[].categoria` usan el nombre visible de `CategoriasMenu`, incluidas categorias inactivas con platos habilitados. Los identificadores internos se conservan en las hojas; si una categoria no figura en el catalogo, se conserva su valor original para no perder platos.
+- La cache del endpoint dura hasta 300 segundos y contempla las revisiones de menu y categorias, por lo que los cambios de nombre realizados desde la app invalidan la respuesta anterior. El catalogo se resuelve una sola vez por respuesta sin cache.
+- Para aplicar este ajuste, ejecutar `clasp push` y actualizar el deployment de la Web App que consume TI, conservando su URL. No requiere ejecutar `setupSheetsAndConfig()` ni cambiar Config, scopes o estructura de hojas.
 
 ## Reglas operativas de menu
 
