@@ -1,7 +1,7 @@
 /**
  * Code.gs - Backend V5 (Refactor & New Features)
  */
-const APP_VERSION = 'v7.36';
+const APP_VERSION = 'v7.38';
 const SPREADSHEET_RETRY_ATTEMPTS = 4;
 const SPREADSHEET_RETRY_DELAY_MS = 1500;
 const CHEF_GAME_DAILY_LIMIT_SECONDS = 15 * 60;
@@ -288,8 +288,9 @@ function formatMenuRowDate_(rawDate) {
 function getMenuDayEndpointPayload_(dateValue) {
   const dateStr = normalizeEndpointDate_(dateValue);
   const cacheKey = [
-    'MENU_DAY_ENDPOINT',
+    'MENU_DAY_ENDPOINT_V2',
     getRevisionValue_('APP_MENU_REVISION'),
+    getRevisionValue_('APP_MENU_CATEGORIES_REVISION'),
     dateStr
   ].join(':');
 
@@ -300,6 +301,7 @@ function getMenuDayEndpointPayload_(dateValue) {
   if (!menuSheet) throw new Error('Hoja Menu no encontrada.');
 
   const data = readSheetValues_(menuSheet, 6);
+  const categoryMap = getMenuCategoryMap_();
   const menu = {};
   const items = [];
 
@@ -316,8 +318,10 @@ function getMenuDayEndpointPayload_(dateValue) {
 
     if (rowDate !== dateStr || String(row[5]).trim().toUpperCase() !== 'SI') continue;
 
-    const categoria = String(row[2] || '').trim();
-    if (!categoria) continue;
+    const categoryId = String(row[2] || '').trim();
+    if (!categoryId) continue;
+    const category = categoryMap[categoryId];
+    const categoria = category ? category.nombre : categoryId;
 
     const item = {
       id: row[0],
