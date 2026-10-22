@@ -56,8 +56,10 @@ Al ejecutar el setup en una instalacion existente se migran automáticamente los
 
 Claves importantes en `Config`:
 
-- `HORA_ENVIO`
-- `MINUTOS_PREV_CIERRE`
+- `HORA_ENVIO` (Hora militar de envío de reporte diario de lunes a jueves)
+- `MINUTOS_PREV_CIERRE` (Minutos antes del envío para cerrar pedidos de lunes a jueves, mínimo 30)
+- `HORA_ENVIO_VIERNES` (Hora militar de envío de reporte diario los viernes)
+- `MINUTOS_PREV_CIERRE_VIERNES` (Minutos antes del envío para cerrar pedidos los viernes, mínimo 30)
 - `HORA_RECORDATORIO`
 - `ADMIN_EMAILS`
 - `RESPONSIBLES_EMAILS_JSON`
@@ -76,6 +78,16 @@ Claves importantes en `Config`:
 - `PROVIDER_NAME`
 - `PROVIDER_PERIOD_ID`
 - `PROVIDER_PERIOD_START`
+
+Notas sobre horarios de cierre y reportes:
+
+- v7.39 integra estos horarios junto con la correccion del endpoint de v7.38. Las claves faltantes se crean automaticamente al inicializar la app o guardar Config, preservando los valores existentes; no es necesario ejecutar `setupSheetsAndConfig()` en una instalacion existente. Tras `clasp push`, actualizar el deployment de la Web App conservando la URL. Si los triggers fueron reemplazados por una version anterior, ejecutar `installTriggers()` una vez para reconstruir los horarios configurados.
+- `.claspignore` limita la subida al manifest y los seis archivos de la app; excluye archivos de prueba como `mock_app.html`.
+- El sistema utiliza la mecánica de `HORA_ENVIO` y `MINUTOS_PREV_CIERRE` para determinar dinámicamente cuándo se cierran los pedidos (`cierre = envio - minutos_previos`).
+- Permite al administrador configurar horarios y minutos de anticipación diferenciados para días regulares (Lunes a Jueves) y Viernes (`HORA_ENVIO_VIERNES` y `MINUTOS_PREV_CIERRE_VIERNES`).
+- **Regla obligatoria de 30 minutos:** Tanto `MINUTOS_PREV_CIERRE` como `MINUTOS_PREV_CIERRE_VIERNES` deben ser un valor entero $\ge 30$. Esta restricción se valida en cliente y servidor, asegurando que los pedidos siempre cierren al menos 30 minutos antes del envío del reporte.
+- Los triggers de tiempo (`scheduledDailyClose`) se gestionan automáticamente ejecutando el cierre a `HORA_ENVIO` de lunes a jueves y a `HORA_ENVIO_VIERNES` los viernes.
+- En los correos de recordatorio (`scheduledSendReminders`), el mensaje indica dinámicamente la hora límite que corresponde al día de corte en curso y omite enviar recordatorios si los pedidos ya están cerrados.
 
 Notas sobre valoraciones y proveedor:
 
@@ -129,6 +141,6 @@ Detalles:
 
 ## Versionado
 
-- Versión actual: `v7.36`.
+- Versión actual: `v7.39`.
 - Todo cambio funcional debe incrementar `APP_VERSION` en `Code.js`.
 - Sigue siempre las reglas operativas de `AGENTS.md`.

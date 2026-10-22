@@ -1588,6 +1588,40 @@ createApp({
     // Config Actions
     const saveConfig = () => {
        const payload = { ...adminState.config };
+
+       // Validación de formato de hora
+       if (payload['HORA_ENVIO']) {
+          if (!/^\d{1,2}:\d{2}$/.test(String(payload['HORA_ENVIO']).trim())) {
+             showModal("Por favor especifica una hora válida (HH:MM) para HORA_ENVIO.", "Horario Inválido");
+             return;
+          }
+       }
+       if (payload['HORA_ENVIO_VIERNES']) {
+          if (!/^\d{1,2}:\d{2}$/.test(String(payload['HORA_ENVIO_VIERNES']).trim())) {
+             showModal("Por favor especifica una hora válida (HH:MM) para HORA_ENVIO_VIERNES.", "Horario Inválido");
+             return;
+          }
+       }
+
+       // Validación de minutos de anticipación al cierre (mínimo 30)
+       if (payload['MINUTOS_PREV_CIERRE'] !== undefined) {
+          const mins = parseInt(payload['MINUTOS_PREV_CIERRE'], 10);
+          if (isNaN(mins) || mins < 30) {
+             showModal("Los minutos de anticipación al cierre (MINUTOS_PREV_CIERRE) deben ser como mínimo 30 minutos.", "Anticipación Inválida");
+             return;
+          }
+          payload['MINUTOS_PREV_CIERRE'] = String(mins);
+       }
+
+       if (payload['MINUTOS_PREV_CIERRE_VIERNES'] !== undefined && String(payload['MINUTOS_PREV_CIERRE_VIERNES']).trim()) {
+          const minsFri = parseInt(payload['MINUTOS_PREV_CIERRE_VIERNES'], 10);
+          if (isNaN(minsFri) || minsFri < 30) {
+             showModal("Los minutos de anticipación al cierre de los viernes (MINUTOS_PREV_CIERRE_VIERNES) deben ser como mínimo 30 minutos.", "Anticipación Inválida");
+             return;
+          }
+          payload['MINUTOS_PREV_CIERRE_VIERNES'] = String(minsFri);
+       }
+
        let responsibleEmails = [];
        try {
           responsibleEmails = normalizeResponsibleEmails(adminState.responsiblesList, { throwOnInvalid: true });
@@ -1602,6 +1636,9 @@ createApp({
           adminState.loading = false;
           if(res.ok) { adminState.configEdit = false; loadAdminData(true); }
           else showModal(res.msg, "Error");
+       }).withFailureHandler(err => {
+          adminState.loading = false;
+          showModal(err.message || "Error guardando la configuración.", "Error");
        }).apiSaveConfig(payload);
     };
 

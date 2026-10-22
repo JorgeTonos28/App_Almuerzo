@@ -988,6 +988,13 @@
                   </div>
                </div>
 
+               <div v-if="adminState.configEdit" class="mb-4 bg-blue-50 border border-blue-200 text-blue-800 rounded-xl p-3 text-xs flex items-center gap-2.5">
+                  <i class="fa-solid fa-circle-info text-blue-500 text-sm shrink-0"></i>
+                  <div>
+                     <b>Regla de anticipación:</b> Los minutos de anticipación al cierre de pedidos deben ser como mínimo 30 minutos (aplica tanto de Lunes a Jueves como los Viernes).
+                  </div>
+               </div>
+
                <!-- Customized Inputs for specific keys -->
                <div class="grid gap-4 md:grid-cols-2">
                   <div v-for="item in adminState.configList" :key="item.key" v-show="item.key !== 'RESPONSIBLES_EMAILS_JSON' && item.key !== 'MEAL_PRICE_HISTORY_JSON'" class="bg-gray-50 p-4 rounded-xl border border-gray-200">
@@ -1000,9 +1007,10 @@
                         {{ formatConfigValue(item.key, adminState.config[item.key]) }}
                      </div>
                      <div v-else>
-                        <input v-if="item.key === 'HORA_ENVIO' || item.key === 'HORA_RECORDATORIO'" type="time" v-model="adminState.config[item.key]" class="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500">
+                        <input v-if="item.key.includes('HORA')" type="time" v-model="adminState.config[item.key]" class="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500">
                         <input v-else-if="item.key === 'MEAL_PRICE_CURRENT'" type="number" min="0" step="0.01" v-model="adminState.config[item.key]" class="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500">
-                        <input v-else-if="item.key.includes('LIMIT') || item.key.includes('MINUTOS')" type="number" v-model="adminState.config[item.key]" class="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500">
+                        <input v-else-if="item.key.includes('MINUTOS')" type="number" min="30" step="1" v-model="adminState.config[item.key]" class="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500">
+                        <input v-else-if="item.key.includes('LIMIT')" type="number" v-model="adminState.config[item.key]" class="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500">
                         <input v-else type="text" v-model="adminState.config[item.key]" class="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500">
                      </div>
                   </div>

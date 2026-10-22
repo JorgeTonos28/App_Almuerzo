@@ -1,7 +1,7 @@
 import os
 
 def read_file(filename):
-    with open(filename, 'r') as f:
+    with open(filename, 'r', encoding='utf-8') as f:
         return f.read()
 
 def main():
@@ -13,7 +13,7 @@ def main():
         assembled = index.replace("<?!= include('css'); ?>", css)
         assembled = assembled.replace("<?!= include('js'); ?>", js)
 
-        with open('mock_app.html', 'w') as f:
+        with open('mock_app.html', 'w', encoding='utf-8') as f:
             f.write(assembled)
         print("Created mock_app.html")
     except Exception as e:

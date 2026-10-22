@@ -99,6 +99,9 @@ function setupSheetsAndConfig(){
   ensureDefaultMenuCategories_(ss.getSheetByName('CategoriasMenu'));
   ensureMenuDayEndpointToken_(ss.getSheetByName('Config'));
   ensureBackupFolder_(ss.getSheetByName('Config'));
+  if (typeof ensureOperationalConfigKeys_ === 'function') {
+    ensureOperationalConfigKeys_(true);
+  }
   populateSampleData_(ss); // Datos de prueba para que arranques rápido
   
   SpreadsheetApp.flush();
@@ -180,7 +183,7 @@ function ensureBackupFolder_(configSheet) {
 }
 
 function populateDefaultConfig_(sheet){
-  if (!sheet || sheet.getLastRow() > 1) return;
+  if (!sheet) return;
   const defaultExpiry = Utilities.formatDate(new Date(Date.now() + (30 * 24 * 60 * 60 * 1000)), Session.getScriptTimeZone(), 'yyyy-MM-dd');
   const todayStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
   const defaultAnnouncementPayload = JSON.stringify({
@@ -203,8 +206,10 @@ function populateDefaultConfig_(sheet){
   });
 
   const defaults = [
-    ['HORA_ENVIO', '15:00', 'Hora militar envío reportes a responsables (HH:MM)'],
-    ['MINUTOS_PREV_CIERRE', '30', 'Minutos antes del envío para cerrar pedidos'],
+    ['HORA_ENVIO', '15:00', 'Hora militar envío reportes de lunes a jueves (HH:MM)'],
+    ['MINUTOS_PREV_CIERRE', '30', 'Minutos antes del envío para cerrar pedidos de lunes a jueves (Mínimo 30)'],
+    ['HORA_ENVIO_VIERNES', '15:00', 'Hora militar envío reportes los viernes (HH:MM)'],
+    ['MINUTOS_PREV_CIERRE_VIERNES', '30', 'Minutos antes del envío para cerrar pedidos los viernes (Mínimo 30)'],
     ['HORA_RECORDATORIO', '13:00', 'Hora envío correos recordatorios'],
     ['ADMIN_EMAILS', 'tu_correo@ejemplo.com', 'Correos admin general separados por ;'],
     ['MAIL_SENDER_NAME', 'Comedor Institucional', 'Nombre remitente correos'],
@@ -229,7 +234,24 @@ function populateDefaultConfig_(sheet){
     ['LOGO_ID', '', 'ID del archivo de imagen del Logo en Drive'],
     ['APP_URL', '', 'URL pública de la aplicación (Web App) para enlaces en correos']
   ];
-  sheet.getRange(2, 1, defaults.length, 3).setValues(defaults);
+
+  if (sheet.getLastRow() <= 1) {
+    sheet.getRange(2, 1, defaults.length, 3).setValues(defaults);
+    return;
+  }
+
+  // Migración segura para entornos existentes
+  const data = sheet.getDataRange().getValues();
+  const existingKeys = {};
+  for (let i = 1; i < data.length; i++) {
+    const k = String(data[i][0] || '').trim();
+    if (k) existingKeys[k] = true;
+  }
+
+  const missing = defaults.filter(d => !existingKeys[d[0]]);
+  if (missing.length > 0) {
+    sheet.getRange(sheet.getLastRow() + 1, 1, missing.length, 3).setValues(missing);
+  }
 }
 
 function populateSampleData_(ss){

@@ -4,3 +4,4 @@ node_modules
  *.map
  .clasp.json
  .clasprc.json
+mock_app.html

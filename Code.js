@@ -1,7 +1,7 @@
 /**
  * Code.gs - Backend V5 (Refactor & New Features)
  */
-const APP_VERSION = 'v7.38';
+const APP_VERSION = 'v7.39';
 const SPREADSHEET_RETRY_ATTEMPTS = 4;
 const SPREADSHEET_RETRY_DELAY_MS = 1500;
 const CHEF_GAME_DAILY_LIMIT_SECONDS = 15 * 60;
@@ -1349,6 +1349,11 @@ function scheduledSendReminders() {
      return;
   }
 
+  if (!isDateOpenForOrdering_(dateStr)) {
+     console.log(`Skipping reminders. Ordering for ${dateStr} is already closed.`);
+     return;
+  }
+
   const ss = SpreadsheetApp.getActive();
   const uSh = ss.getSheetByName('Usuarios');
   const uData = uSh.getDataRange().getValues();
@@ -1363,26 +1368,18 @@ function scheduledSendReminders() {
     }
   }
 
+  const now = new Date();
+  const cutoff = getOrderCutoffTimeForDay_(now.getDay());
+  const limitDate = new Date(now);
+  limitDate.setHours(cutoff.h, cutoff.m, 0, 0);
+  const limitStr = Utilities.formatDate(limitDate, Session.getScriptTimeZone(), 'hh:mm a');
+  const appUrl = getAppUrl_();
+
   uData.slice(1).forEach(row => {
     const email = String(row[0]).toLowerCase();
     const estado = row[4];
     const prefs = JSON.parse(row[5] || '{}');
     if (estado === 'ACTIVO' && !orderedEmails.has(email) && prefs.reminders !== false) {
-      // Calculate closing time for display
-      const envio = getConfigValue_('HORA_ENVIO') || '15:00';
-      const mins = parseInt(getConfigValue_('MINUTOS_PREV_CIERRE') || '30', 10);
-
-      // Calculate exact closing time for display
-      let h = 15, m = 0;
-      if (envio instanceof Date) { h = envio.getHours(); m = envio.getMinutes(); }
-      else { const p = String(envio).split(':'); h = parseInt(p[0]||15); m = parseInt(p[1]||0); }
-
-      const limitDate = new Date();
-      limitDate.setHours(h, m, 0, 0);
-      limitDate.setMinutes(limitDate.getMinutes() - mins);
-      const limitStr = Utilities.formatDate(limitDate, Session.getScriptTimeZone(), 'hh:mm a');
-
-      const appUrl = getAppUrl_();
       const userName = row[1] ? row[1].split(' ')[0] : 'Colaborador'; // First name
 
       const html = getEmailTemplate_({
@@ -1654,12 +1651,19 @@ function apiGetAdminData() {
        }
        data.configKeys = Object.keys(data.config);
 
-       // Get descriptions
        const cSh = SpreadsheetApp.getActive().getSheetByName('Config');
        if (cSh) {
-          data.configList = cSh.getDataRange().getValues().slice(1).map(r => ({
-             key: String(r[0]), value: String(r[1]), desc: r[2]
-          }));
+          data.configList = cSh.getDataRange().getValues().slice(1).map(r => {
+             let valStr = String(r[1]);
+             if (r[1] instanceof Date) {
+                if (r[1].getFullYear() === 1899) {
+                   valStr = Utilities.formatDate(r[1], Session.getScriptTimeZone(), 'HH:mm');
+                } else {
+                   valStr = Utilities.formatDate(r[1], Session.getScriptTimeZone(), 'yyyy-MM-dd');
+                }
+             }
+             return { key: String(r[0]), value: valStr, desc: r[2] };
+          });
        }
 
        data.holidays = getHolidaysList_();
@@ -1757,6 +1761,39 @@ function apiSaveConfig(configData) {
         configData.RESPONSIBLES_EMAILS_JSON = JSON.stringify(summaryCopies);
      }
 
+     // Validate schedule rules (HORA_ENVIO, MINUTOS_PREV_CIERRE, HORA_ENVIO_VIERNES, MINUTOS_PREV_CIERRE_VIERNES)
+     if (configData.HORA_ENVIO !== undefined) {
+        const parts = String(configData.HORA_ENVIO).split(':');
+        const h = parseInt(parts[0], 10), m = parseInt(parts[1], 10);
+        if (isNaN(h) || isNaN(m) || h < 0 || h > 23 || m < 0 || m > 59) {
+           throw new Error("Formato de hora inválido para HORA_ENVIO (debe ser HH:MM militar).");
+        }
+     }
+
+     if (configData.HORA_ENVIO_VIERNES !== undefined && String(configData.HORA_ENVIO_VIERNES).trim()) {
+        const parts = String(configData.HORA_ENVIO_VIERNES).split(':');
+        const h = parseInt(parts[0], 10), m = parseInt(parts[1], 10);
+        if (isNaN(h) || isNaN(m) || h < 0 || h > 23 || m < 0 || m > 59) {
+           throw new Error("Formato de hora inválido para HORA_ENVIO_VIERNES (debe ser HH:MM militar).");
+        }
+     }
+
+     if (configData.MINUTOS_PREV_CIERRE !== undefined) {
+        const mins = parseInt(configData.MINUTOS_PREV_CIERRE, 10);
+        if (isNaN(mins) || mins < 30) {
+           throw new Error("Los minutos de anticipación al cierre de lunes a jueves (MINUTOS_PREV_CIERRE) deben ser como mínimo 30 minutos.");
+        }
+        configData.MINUTOS_PREV_CIERRE = String(mins);
+     }
+
+     if (configData.MINUTOS_PREV_CIERRE_VIERNES !== undefined && String(configData.MINUTOS_PREV_CIERRE_VIERNES).trim()) {
+        const minsFri = parseInt(configData.MINUTOS_PREV_CIERRE_VIERNES, 10);
+        if (isNaN(minsFri) || minsFri < 30) {
+           throw new Error("Los minutos de anticipación al cierre de los viernes (MINUTOS_PREV_CIERRE_VIERNES) deben ser como mínimo 30 minutos.");
+        }
+        configData.MINUTOS_PREV_CIERRE_VIERNES = String(minsFri);
+     }
+
      const ss = SpreadsheetApp.getActive();
      const sh = ss.getSheetByName('Config');
      const data = sh.getDataRange().getValues();
@@ -1768,6 +1805,7 @@ function apiSaveConfig(configData) {
      const normalizedMealPrice = hasIncomingMealPrice ? normalizeMealPriceValue_(configData.MEAL_PRICE_CURRENT) : currentMealPrice;
      const mealPriceChanged = hasIncomingMealPrice && normalizedMealPrice !== currentMealPrice;
      let mealPriceHistoryRow = -1;
+     const watchedTimeKeys = ['HORA_RECORDATORIO', 'HORA_ENVIO', 'HORA_ENVIO_VIERNES'];
 
      for(let i=1; i<data.length; i++) {
         const key = String(data[i][0]);
@@ -1777,7 +1815,7 @@ function apiSaveConfig(configData) {
         }
         if (configData[key] !== undefined) {
            const val = key === 'MEAL_PRICE_CURRENT' ? normalizedMealPrice : configData[key];
-           if ((key === 'HORA_RECORDATORIO' || key === 'HORA_ENVIO') && String(data[i][1]) !== String(val)) {
+           if (watchedTimeKeys.includes(key) && String(data[i][1]) !== String(val)) {
               timeChanged = true;
            }
            sh.getRange(i+1, 2).setValue(val);
@@ -3175,27 +3213,9 @@ function isDateOpenForOrdering_(targetDateStr, holidaysSet) {
 
   // If today is the cutoff day
   if (todayStr === prevBizDayStr) {
-    let envioTime = getConfigValue_('HORA_ENVIO') || '15:00';
-    const minutesBefore = parseInt(getConfigValue_('MINUTOS_PREV_CIERRE') || '30', 10);
-
-    let h, m;
-    if (envioTime instanceof Date) {
-       h = envioTime.getHours();
-       m = envioTime.getMinutes();
-    } else {
-       const parts = String(envioTime).split(':');
-       h = parseInt(parts[0], 10);
-       m = parseInt(parts[1], 10);
-    }
-
-    // Fallback if config is invalid (e.g. "[]")
-    if (isNaN(h) || isNaN(m)) { h = 15; m = 0; }
-    if (isNaN(minutesBefore)) minutesBefore = 30;
-
-    // Construct limit time using the SAME day as 'now'
+    const cutoff = getOrderCutoffTimeForDay_(now.getDay());
     const limit = new Date(now);
-    limit.setHours(h, m, 0, 0);
-    limit.setMinutes(limit.getMinutes() - minutesBefore);
+    limit.setHours(cutoff.h, cutoff.m, 0, 0);
 
     if (now > limit) return false;
   }
@@ -3256,7 +3276,7 @@ function backupOrdersToDrive_(dateStr) {
 
 // Helpers reused...
 let _configCache = null;
-const OPERATIONAL_CONFIG_SCHEMA_CACHE_KEY = 'CONFIG_SCHEMA_READY_V3';
+const OPERATIONAL_CONFIG_SCHEMA_CACHE_KEY = 'CONFIG_SCHEMA_READY_V4';
 
 function readSheetValues_(sheet, columnCount) {
   if (!sheet) return [];
@@ -3392,6 +3412,10 @@ function getOperationalConfigDefinitions_() {
   });
 
   return [
+    { key: 'HORA_ENVIO', value: '15:00', description: 'Hora militar envío reportes de lunes a jueves (HH:MM)' },
+    { key: 'MINUTOS_PREV_CIERRE', value: '30', description: 'Minutos antes del envío para cerrar pedidos de lunes a jueves (Mínimo 30)' },
+    { key: 'HORA_ENVIO_VIERNES', value: '15:00', description: 'Hora militar envío reportes los viernes (HH:MM)' },
+    { key: 'MINUTOS_PREV_CIERRE_VIERNES', value: '30', description: 'Minutos antes del envío para cerrar pedidos los viernes (Mínimo 30)' },
     { key: 'LOGO_ID', value: '', description: 'ID del archivo de imagen del Logo en Drive' },
     { key: 'APP_URL', value: ScriptApp.getService().getUrl(), description: 'URL publica de la aplicacion (Web App)' },
     { key: 'MEAL_PRICE_CURRENT', value: '57', description: 'Costo actual por almuerzo. Al cambiarlo se conserva historial automatico por fecha.' },
@@ -3423,10 +3447,16 @@ function ensureConfigKeysBatch_(definitions) {
       };
     }
 
+    const defaultEnvio = existing['HORA_ENVIO'] ? String(existing['HORA_ENVIO'].value || '15:00') : '15:00';
+    const defaultMins = existing['MINUTOS_PREV_CIERRE'] ? String(existing['MINUTOS_PREV_CIERRE'].value || '30') : '30';
+
     const missingRows = [];
     definitions.forEach(def => {
       if (!existing[def.key]) {
-        missingRows.push([def.key, def.value, def.description]);
+        let val = def.value;
+        if (def.key === 'HORA_ENVIO_VIERNES') val = defaultEnvio;
+        else if (def.key === 'MINUTOS_PREV_CIERRE_VIERNES') val = defaultMins;
+        missingRows.push([def.key, val, def.description]);
       } else if (def.key === 'MENU_DAY_ENDPOINT_TOKEN' && !String(existing[def.key].value || '').trim()) {
         sh.getRange(existing[def.key].row, 2).setValue(generateSecretToken_());
       }
@@ -3441,11 +3471,11 @@ function ensureConfigKeysBatch_(definitions) {
   }
 }
 
-function ensureOperationalConfigKeys_() {
+function ensureOperationalConfigKeys_(force) {
   const cache = CacheService.getScriptCache();
-  if (cache.get(OPERATIONAL_CONFIG_SCHEMA_CACHE_KEY)) return;
+  if (!force && cache && cache.get(OPERATIONAL_CONFIG_SCHEMA_CACHE_KEY)) return;
   ensureConfigKeysBatch_(getOperationalConfigDefinitions_());
-  cache.put(OPERATIONAL_CONFIG_SCHEMA_CACHE_KEY, '1', 3600);
+  if (cache) cache.put(OPERATIONAL_CONFIG_SCHEMA_CACHE_KEY, '1', 3600);
 }
 
 function ensureMealPriceConfig_() {
@@ -4981,6 +5011,61 @@ function installTriggers() {
   reinstallTimeTriggers_();
 }
 
+function parseTime_(val, defH, defM) {
+   if (val instanceof Date) return { h: val.getHours(), m: val.getMinutes() };
+   if (typeof val === 'string' && val.includes(':')) {
+      const p = val.split(':');
+      const h = parseInt(p[0], 10);
+      const m = parseInt(p[1], 10);
+      return { h: isNaN(h) ? defH : h, m: isNaN(m) ? defM : m };
+   }
+   return { h: defH, m: defM };
+}
+
+function parseTimeToMinutes_(timeVal) {
+   if (!timeVal && timeVal !== 0) return null;
+   if (timeVal instanceof Date) {
+      return timeVal.getHours() * 60 + timeVal.getMinutes();
+   }
+   if (typeof timeVal === 'string' && timeVal.includes(':')) {
+      const parts = timeVal.split(':');
+      const h = parseInt(parts[0], 10);
+      const m = parseInt(parts[1], 10);
+      if (isNaN(h) || isNaN(m) || h < 0 || h > 23 || m < 0 || m > 59) return null;
+      return h * 60 + m;
+   }
+   return null;
+}
+
+function getOrderCutoffTimeForDay_(dayOfWeek) {
+   const isFriday = dayOfWeek === 5;
+   if (isFriday) {
+      const envioFri = parseTime_(getConfigValue_('HORA_ENVIO_VIERNES') || getConfigValue_('HORA_ENVIO'), 15, 0);
+      const rawMinsFri = parseInt(getConfigValue_('MINUTOS_PREV_CIERRE_VIERNES') || getConfigValue_('MINUTOS_PREV_CIERRE') || '30', 10);
+      const safeMinsFri = (!isNaN(rawMinsFri) && rawMinsFri >= 30) ? rawMinsFri : 30;
+      let totalMins = envioFri.h * 60 + envioFri.m - safeMinsFri;
+      if (totalMins < 0) totalMins += 24 * 60;
+      return { h: Math.floor(totalMins / 60), m: totalMins % 60 };
+   }
+
+   const envio = parseTime_(getConfigValue_('HORA_ENVIO'), 15, 0);
+   const rawMins = parseInt(getConfigValue_('MINUTOS_PREV_CIERRE') || '30', 10);
+   const safeMins = (!isNaN(rawMins) && rawMins >= 30) ? rawMins : 30;
+   let totalMins = envio.h * 60 + envio.m - safeMins;
+   if (totalMins < 0) totalMins += 24 * 60;
+   return { h: Math.floor(totalMins / 60), m: totalMins % 60 };
+}
+
+function getReportSendTimeForDay_(dayOfWeek) {
+   const isFriday = dayOfWeek === 5;
+   if (isFriday) {
+      const fridayVal = getConfigValue_('HORA_ENVIO_VIERNES');
+      if (fridayVal) return parseTime_(fridayVal, 15, 0);
+   }
+   const regularVal = getConfigValue_('HORA_ENVIO');
+   return parseTime_(regularVal, 15, 0);
+}
+
 function reinstallTimeTriggers_() {
   const triggers = ScriptApp.getProjectTriggers();
   // Delete only time triggers (scheduledSendReminders, scheduledDailyClose)
@@ -4992,35 +5077,54 @@ function reinstallTimeTriggers_() {
     }
   });
 
-  // Helper to parse HH:mm
-  const parseTime = (val, defH, defM) => {
-     if (val instanceof Date) return { h: val.getHours(), m: val.getMinutes() };
-     if (typeof val === 'string' && val.includes(':')) {
-        const p = val.split(':');
-        return { h: parseInt(p[0]||defH), m: parseInt(p[1]||defM) };
-     }
-     return { h: defH, m: defM };
-  };
-  
   // Recordatorios (HORA_RECORDATORIO)
-  const recTime = parseTime(getConfigValue_('HORA_RECORDATORIO'), 13, 0); // Default 1:00 PM
+  const recTime = parseTime_(getConfigValue_('HORA_RECORDATORIO'), 13, 0); // Default 1:00 PM
   ScriptApp.newTrigger('scheduledSendReminders')
     .timeBased()
     .everyDays(1)
     .atHour(recTime.h)
     .nearMinute(recTime.m)
     .create();
-    
-  // Cierre y Reportes (HORA_ENVIO)
-  const closeTime = parseTime(getConfigValue_('HORA_ENVIO'), 15, 0); // Default 3:00 PM
-  ScriptApp.newTrigger('scheduledDailyClose')
-    .timeBased()
-    .everyDays(1)
-    .atHour(closeTime.h)
-    .nearMinute(closeTime.m)
-    .create();
-    
-  console.log(`Triggers de tiempo reinstalados. Recordatorio: ${recTime.h}:${recTime.m}, Cierre: ${closeTime.h}:${closeTime.m}`);
+
+  // Cierre y Reportes (HORA_ENVIO regular y HORA_ENVIO_VIERNES)
+  const sendRegular = getReportSendTimeForDay_(1); // Lunes a Jueves
+  const sendFriday = getReportSendTimeForDay_(5);  // Viernes
+
+  if (sendRegular.h === sendFriday.h && sendRegular.m === sendFriday.m) {
+    ScriptApp.newTrigger('scheduledDailyClose')
+      .timeBased()
+      .everyDays(1)
+      .atHour(sendRegular.h)
+      .nearMinute(sendRegular.m)
+      .create();
+    console.log(`Trigger diario de cierre instalado a las ${sendRegular.h}:${sendRegular.m}`);
+  } else {
+    const monThuDays = [
+      ScriptApp.WeekDay.MONDAY,
+      ScriptApp.WeekDay.TUESDAY,
+      ScriptApp.WeekDay.WEDNESDAY,
+      ScriptApp.WeekDay.THURSDAY
+    ];
+    monThuDays.forEach(day => {
+      ScriptApp.newTrigger('scheduledDailyClose')
+        .timeBased()
+        .onWeekDay(day)
+        .atHour(sendRegular.h)
+        .nearMinute(sendRegular.m)
+        .create();
+    });
+
+    ScriptApp.newTrigger('scheduledDailyClose')
+      .timeBased()
+      .onWeekDay(ScriptApp.WeekDay.FRIDAY)
+      .atHour(sendFriday.h)
+      .nearMinute(sendFriday.m)
+      .create();
+
+    console.log(`Triggers semanales de cierre instalados. Lun-Jue: ${sendRegular.h}:${sendRegular.m}, Vie: ${sendFriday.h}:${sendFriday.m}`);
+  }
+
+  console.log(`Triggers de tiempo reinstalados. Recordatorio: ${recTime.h}:${recTime.m}`);
 }
 
 function onSpreadsheetEdit(e) {
@@ -5029,13 +5133,12 @@ function onSpreadsheetEdit(e) {
   const sheet = range.getSheet();
   if (sheet.getName() !== 'Config') return;
 
-  // Check if edited column is Value (Col 2) or Key (Col 1)
-  // We care if the Key (Col 1) corresponding to this row is HORA_RECORDATORIO or HORA_ENVIO
   const row = range.getRow();
   if (row <= 1) return; // Header
 
   const key = sheet.getRange(row, 1).getValue();
-  if (key === 'HORA_RECORDATORIO' || key === 'HORA_ENVIO') {
+  const watchedKeys = ['HORA_RECORDATORIO', 'HORA_ENVIO', 'HORA_ENVIO_VIERNES', 'MINUTOS_PREV_CIERRE', 'MINUTOS_PREV_CIERRE_VIERNES'];
+  if (watchedKeys.includes(key)) {
     console.log(`Detectado cambio en ${key}. Reinstalando triggers...`);
     // Invalidate Cache
     _configCache = null;
