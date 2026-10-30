@@ -139,8 +139,19 @@ Detalles:
 1. Ejecuta `clasp push` para subir los archivos al proyecto de Apps Script.
 2. Al modificar backend o archivos servidos por `doGet()` (`Code.js`, `index.html`, `js.html`, `css.html`), publica un nuevo deployment de la web app.
 
+## Calendario laboral y excepciones de Google (v7.40)
+
+- Administracion > Calendario muestra los dias libres manuales y los proximos 10 feriados de Google dentro de los siguientes 12 meses, con nombre, fecha y estado. Si Google no esta disponible o faltan permisos, se muestra un aviso y se mantienen los dias libres manuales.
+- Desactivar bloqueo permite trabajar una fecha marcada por Google sin editar el calendario externo. Reactivar bloqueo vuelve a impedir pedidos e importaciones y cancela los pedidos activos de esa fecha, con el aviso habitual por correo. Los fines de semana y los dias libres manuales siguen bloqueados aunque se desactive el feriado de Google.
+- Las excepciones se guardan por fecha en `Config.GOOGLE_HOLIDAY_EXCLUDED_DATES_JSON` (lista JSON, valor inicial `[]`), administrada solo desde Calendario. Guardar el formulario general de Config no sobrescribe estas excepciones. No son preferencias personales ni avisos descartables: aplican a toda la institucion.
+- La importacion semanal consulta el calendario efectivo antes de armar la vista previa. Si hay platos para una fecha bloqueada en una carga de cinco columnas, muestra la fecha y pide corregir Calendario; no omite silenciosamente esos platos. El servidor vuelve a validar todas las fechas antes de escribir y rechaza la importacion si Google Calendar no puede verificarse.
+- Ejemplo: para trabajar el viernes 6/11/2026 y descansar el lunes 9/11, desactivar solo el bloqueo del 6 desde Calendario y volver a procesar la importacion del 2 al 6. No se aplica esta excepcion automaticamente.
+- Los eventos de Google se consultan en bloque con cache de 5 minutos. Los cambios de excepciones o dias libres invalidan las caches de calendario, menu e inicio; las respuestas de cada accion actualizan el modulo administrativo sin un bootstrap global.
+- La nueva clave se crea automaticamente en instalaciones existentes; `Setup.js` tambien la contempla. No requiere ejecutar `setupSheetsAndConfig()`, cambiar hojas, servicios ni scopes. Requiere `clasp push` y actualizar los deployments utilizados por la app y por TI conservando sus URLs.
+- Verificacion local: `node --test tests/calendar-holidays.test.cjs`.
+
 ## Versionado
 
-- Versión actual: `v7.39`.
+- Versión actual: `v7.40`.
 - Todo cambio funcional debe incrementar `APP_VERSION` en `Code.js`.
 - Sigue siempre las reglas operativas de `AGENTS.md`.
