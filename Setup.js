@@ -206,6 +206,7 @@ function populateDefaultConfig_(sheet){
   });
 
   const defaults = [
+    ['GOOGLE_HOLIDAY_EXCLUDED_DATES_JSON', '[]', 'Fechas de Google Calendar sin bloqueo laboral. Administrar desde Calendario.'],
     ['HORA_ENVIO', '15:00', 'Hora militar envío reportes de lunes a jueves (HH:MM)'],
     ['MINUTOS_PREV_CIERRE', '30', 'Minutos antes del envío para cerrar pedidos de lunes a jueves (Mínimo 30)'],
     ['HORA_ENVIO_VIERNES', '15:00', 'Hora militar envío reportes los viernes (HH:MM)'],

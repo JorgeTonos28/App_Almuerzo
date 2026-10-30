@@ -997,7 +997,7 @@
 
                <!-- Customized Inputs for specific keys -->
                <div class="grid gap-4 md:grid-cols-2">
-                  <div v-for="item in adminState.configList" :key="item.key" v-show="item.key !== 'RESPONSIBLES_EMAILS_JSON' && item.key !== 'MEAL_PRICE_HISTORY_JSON'" class="bg-gray-50 p-4 rounded-xl border border-gray-200">
+                  <div v-for="item in adminState.configList" :key="item.key" v-show="item.key !== 'RESPONSIBLES_EMAILS_JSON' && item.key !== 'MEAL_PRICE_HISTORY_JSON' && item.key !== 'GOOGLE_HOLIDAY_EXCLUDED_DATES_JSON'" class="bg-gray-50 p-4 rounded-xl border border-gray-200">
                      <div class="flex justify-between items-start mb-2">
                         <div class="text-xs font-bold text-gray-500 uppercase tracking-wider">{{ item.key }}</div>
                         <div class="text-[10px] text-gray-400 max-w-[50%] text-right leading-tight">{{ item.desc }}</div>
@@ -1102,8 +1102,29 @@
          </div>
 
          <!-- Holidays Module (New) -->
-         <div v-if="adminState.tab === 'DIAS_LIBRES'" class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-            <h2 class="text-xl font-bold text-gray-900 mb-4">Días Libres (Feriados)</h2>
+         <div v-if="adminState.tab === 'DIAS_LIBRES'" class="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 md:p-6 min-w-0">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+               <h2 class="text-xl font-bold text-gray-900">Calendario laboral</h2>
+               <button @click="refreshHolidays" :disabled="adminState.loading" class="px-4 py-2 rounded-lg border text-sm font-bold disabled:opacity-50">Actualizar calendario</button>
+            </div>
+            <p v-if="!adminState.calendarAvailable" role="status" class="mb-4 rounded-xl bg-amber-50 text-amber-900 p-3 text-sm">No se pudo consultar Google Calendar. Los días libres manuales siguen vigentes. Reintenta actualizar; revisa los permisos del calendario si el problema continúa.</p>
+            <h3 class="font-bold text-gray-900 mb-2">Próximos 10 feriados de Google</h3>
+            <p class="text-sm text-gray-600 mb-4">Desactiva el bloqueo de una fecha si ese día se trabajará. La excepción se guarda en la app y no modifica Google Calendar. Los días libres manuales tienen prioridad.</p>
+            <div class="overflow-x-auto mb-6">
+               <table class="w-full min-w-[560px] text-sm text-left">
+                  <thead class="bg-gray-50 text-gray-500 text-xs uppercase"><tr><th class="p-3">Fecha</th><th class="p-3">Feriado</th><th class="p-3">Estado en la app</th><th class="p-3">Acción</th></tr></thead>
+                  <tbody class="divide-y divide-gray-100">
+                     <tr v-for="h in adminState.calendarHolidays" :key="h.date">
+                        <td class="p-3 whitespace-nowrap">{{ h.date.split('-').reverse().join('/') }}</td>
+                        <td class="p-3">{{ h.desc }}</td>
+                        <td class="p-3">{{ h.manualBlocked ? 'Bloqueado por día libre manual' : (h.excluded ? 'Bloqueo de Google desactivado' : 'Feriado activo') }}</td>
+                        <td class="p-3"><button @click="toggleGoogleHoliday(h)" :disabled="adminState.loading" class="px-3 py-2 border rounded-lg text-xs font-bold disabled:opacity-50 whitespace-nowrap">{{ h.excluded ? 'Reactivar bloqueo' : 'Desactivar bloqueo' }}</button></td>
+                     </tr>
+                     <tr v-if="adminState.calendarAvailable && !adminState.calendarHolidays.length"><td colspan="4" class="p-4 text-gray-500">No hay feriados de Google en los próximos 12 meses.</td></tr>
+                  </tbody>
+               </table>
+            </div>
+            <h3 class="font-bold text-gray-900 mb-3">Días libres manuales</h3>
             <div class="flex flex-col md:flex-row gap-4 mb-6 bg-gray-50 p-4 rounded-xl border border-gray-200">
                <input v-model="adminState.holidayModal.data.date" type="date" class="bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500">
                <input v-model="adminState.holidayModal.data.desc" type="text" placeholder="Descripción (ej. Navidad)" class="flex-grow bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500">
@@ -1485,8 +1506,9 @@
           <div class="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3 shrink-0">
              <button @click="adminState.menuImportModal.open = false" class="px-4 py-2 rounded-lg text-sm font-bold text-gray-500 hover:bg-gray-200 transition-colors" :disabled="adminState.loading">Cancelar</button>
 
-             <button v-if="adminState.menuImportModal.step === 1" @click="processMenuImport" class="px-6 py-2 rounded-lg text-sm font-bold bg-gray-900 text-white hover:bg-black transition-colors flex items-center gap-2">
-                Procesar <i class="fa-solid fa-arrow-right"></i>
+             <button v-if="adminState.menuImportModal.step === 1" @click="processMenuImport" :disabled="adminState.loading" class="px-6 py-2 rounded-lg text-sm font-bold bg-gray-900 text-white hover:bg-black transition-colors flex items-center gap-2 disabled:opacity-50">
+                <i v-if="adminState.loading" class="fa-solid fa-circle-notch fa-spin"></i>
+                {{ adminState.loading ? 'Verificando calendario...' : 'Procesar' }} <i v-if="!adminState.loading" class="fa-solid fa-arrow-right"></i>
              </button>
 
              <button v-if="adminState.menuImportModal.step === 2" @click="saveWeeklyMenu" class="px-6 py-2 rounded-lg text-sm font-bold bg-blue-600 text-white hover:bg-blue-700 transition-colors flex items-center gap-2 disabled:opacity-50" :disabled="adminState.loading">

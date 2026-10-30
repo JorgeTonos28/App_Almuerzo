@@ -1,7 +1,7 @@
 /**
  * Code.gs - Backend V5 (Refactor & New Features)
  */
-const APP_VERSION = 'v7.39';
+const APP_VERSION = 'v7.40';
 const SPREADSHEET_RETRY_ATTEMPTS = 4;
 const SPREADSHEET_RETRY_DELAY_MS = 1500;
 const CHEF_GAME_DAILY_LIMIT_SECONDS = 15 * 60;
@@ -1666,7 +1666,7 @@ function apiGetAdminData() {
           });
        }
 
-       data.holidays = getHolidaysList_();
+       Object.assign(data, getAdminHolidayData_());
        data.menuCategories = getMenuCategories_(true);
     }
 
@@ -1756,6 +1756,8 @@ function apiSaveConfig(configData) {
      if (!admin || admin.rol !== 'ADMIN_GEN') throw new Error("Permiso denegado.");
 
      ensureOperationalConfigKeys_();
+     // This key is managed only by Calendario; ignore stale Config form copies.
+     delete configData.GOOGLE_HOLIDAY_EXCLUDED_DATES_JSON;
      if (configData.RESPONSIBLES_EMAILS_JSON !== undefined) {
         const summaryCopies = normalizeDailySummaryCopyRecipients_(configData.RESPONSIBLES_EMAILS_JSON, { throwOnInvalid: true });
         configData.RESPONSIBLES_EMAILS_JSON = JSON.stringify(summaryCopies);
@@ -2614,10 +2616,13 @@ function apiSaveWeeklyMenu(menuData) {
    const categoryMap = getMenuCategoryMap_();
 
    // Normalize keys to ensure matching
+   const holidayState = getHolidayState_();
+   if (!holidayState.calendarAvailable) throw new Error('No se pudo verificar Google Calendar. Intenta nuevamente antes de importar.');
+   const holidaysSet = new Set(holidayState.effectiveHolidays);
    const datesToUpdate = new Set();
    Object.keys(menuData).forEach(k => {
-      const normalizedDate = formatDate_(new Date(k + 'T12:00:00'));
-      assertDateAllowedForMenuManagement_(normalizedDate, "importar");
+      const normalizedDate = normalizeEndpointDate_(k);
+      assertDateAllowedForMenuManagement_(normalizedDate, 'importar', holidaysSet);
       const items = Array.isArray(menuData[k]) ? menuData[k] : [];
       items.forEach(item => {
          const category = categoryMap[String(item && item.cat || '').trim()];
@@ -2719,13 +2724,52 @@ function apiSaveWeeklyMenu(menuData) {
 // === HOLIDAYS API ===
 
 function apiGetHolidays() {
-   return { ok: true, holidays: getHolidaysList_() };
+   const admin = getUserInfo_();
+   if (!admin || admin.rol !== 'ADMIN_GEN' || admin.estado !== 'ACTIVO') throw new Error('Denegado');
+   return Object.assign({ ok: true }, getAdminHolidayData_());
+}
+
+function apiSetGoogleHolidayExcluded(dateStr, excluded) {
+   const admin = getUserInfo_();
+   if (!admin || admin.rol !== 'ADMIN_GEN' || admin.estado !== 'ACTIVO') throw new Error('Denegado');
+   dateStr = normalizeEndpointDate_(dateStr);
+   if (dateStr < getTodayYmd_() || typeof excluded !== 'boolean') throw new Error('Fecha o estado no valido.');
+   const calendar = getGoogleHolidayData_();
+   if (!calendar.available) throw new Error('No se pudo verificar Google Calendar. Intenta nuevamente.');
+   if (!calendar.holidays.some(h => h.date === dateStr)) throw new Error('La fecha no figura en el calendario de Google.');
+
+   const lock = LockService.getScriptLock();
+   if (!lock.tryLock(10000)) throw new Error('Hay otro cambio en curso. Intenta nuevamente.');
+   try {
+      ensureOperationalConfigKeys_();
+      _configCache = null;
+      const dates = new Set(getExcludedGoogleHolidayDates_());
+      if (excluded) dates.add(dateStr); else dates.delete(dateStr);
+      const sheet = SpreadsheetApp.getActive().getSheetByName('Config');
+      if (!sheet) throw new Error('Hoja Config no encontrada.');
+      const data = readSheetValues_(sheet, 3);
+      const row = data.findIndex(r => String(r[0]) === 'GOOGLE_HOLIDAY_EXCLUDED_DATES_JSON');
+      if (row < 1) throw new Error('Configuracion de calendario incompleta.');
+      sheet.getRange(row + 1, 2).setValue(JSON.stringify(Array.from(dates).sort()));
+      _configCache = null;
+      invalidateHolidayDataCache_();
+   } finally {
+      lock.releaseLock();
+   }
+   let cancellations = [];
+   let cancellationEmails = 0;
+   if (!excluded) {
+      cancellations = cancelActiveOrdersForPlans_([{ date: dateStr, cancelAll: true }]);
+      cancellationEmails = notifyLunchSuspendedCancellations_(dateStr, cancellations, 'Feriado de Google reactivado');
+   }
+   return Object.assign({ ok: true, cancellations: cancellations.length, cancellationEmails: cancellationEmails }, getAdminHolidayData_());
 }
 
 function apiSaveHoliday(dateStr, desc) {
    const admin = getUserInfo_();
    if (!admin || admin.rol !== 'ADMIN_GEN') throw new Error("Denegado");
 
+   dateStr = normalizeEndpointDate_(dateStr);
    // Validate future date
    const d = new Date(dateStr + 'T12:00:00');
    const now = new Date();
@@ -2738,7 +2782,7 @@ function apiSaveHoliday(dateStr, desc) {
 
    // Check duplicate
    for(let i=1; i<data.length; i++) {
-      if (formatDate_(new Date(data[i][0])) === dateStr) {
+      if (data[i][0] && formatMenuRowDate_(data[i][0]) === dateStr) {
          rowIdx = i + 1;
          break;
       }
@@ -2747,30 +2791,27 @@ function apiSaveHoliday(dateStr, desc) {
    if (rowIdx > 0) sh.getRange(rowIdx, 2).setValue(desc);
    else sh.appendRow([dateStr, desc]);
 
-   CacheService.getScriptCache().remove('HOLIDAYS_CACHE_V2');
+   invalidateHolidayDataCache_();
    const suspendedOrders = cancelActiveOrdersForPlans_([{ date: dateStr, cancelAll: true }]);
    const suspensionEmails = notifyLunchSuspendedCancellations_(dateStr, suspendedOrders, desc);
-   invalidateMenuDataCache_();
-   invalidateUserInitCache_();
-   return {
+   return Object.assign({
       ok: true,
       cancellations: suspendedOrders.length,
       cancellationEmails: suspensionEmails
-   };
+   }, getAdminHolidayData_());
 }
 
 function apiDeleteHoliday(dateStr) {
    const admin = getUserInfo_();
    if (!admin || admin.rol !== 'ADMIN_GEN') throw new Error("Denegado");
+   dateStr = normalizeEndpointDate_(dateStr);
    const sh = SpreadsheetApp.getActive().getSheetByName('DiasLibres');
    const data = sh.getDataRange().getValues();
    for(let i=1; i<data.length; i++) {
-      if (formatDate_(new Date(data[i][0])) === dateStr) {
+      if (data[i][0] && formatMenuRowDate_(data[i][0]) === dateStr) {
          sh.deleteRow(i+1);
-         CacheService.getScriptCache().remove('HOLIDAYS_CACHE_V2');
-         invalidateMenuDataCache_();
-         invalidateUserInitCache_();
-         return { ok: true };
+         invalidateHolidayDataCache_();
+         return Object.assign({ ok: true }, getAdminHolidayData_());
       }
    }
    return { ok: false };
@@ -3246,9 +3287,9 @@ function isDateAllowedForMenuManagement_(targetDateStr, holidaysSet) {
   return true;
 }
 
-function assertDateAllowedForMenuManagement_(targetDateStr, actionLabel) {
-  if (!isDateAllowedForMenuManagement_(targetDateStr)) {
-    throw new Error("Solo puedes " + actionLabel + " menú para días laborables futuros.");
+function assertDateAllowedForMenuManagement_(targetDateStr, actionLabel, holidaysSet) {
+  if (!isDateAllowedForMenuManagement_(targetDateStr, holidaysSet)) {
+    throw new Error('No puedes ' + actionLabel + ' menú para ' + targetDateStr + ': la fecha debe ser futura, de lunes a viernes y sin bloqueo en Calendario. Revisa los días libres y los feriados de Google en Administración > Calendario.');
   }
 }
 
@@ -3276,7 +3317,7 @@ function backupOrdersToDrive_(dateStr) {
 
 // Helpers reused...
 let _configCache = null;
-const OPERATIONAL_CONFIG_SCHEMA_CACHE_KEY = 'CONFIG_SCHEMA_READY_V4';
+const OPERATIONAL_CONFIG_SCHEMA_CACHE_KEY = 'CONFIG_SCHEMA_READY_V5';
 
 function readSheetValues_(sheet, columnCount) {
   if (!sheet) return [];
@@ -3413,6 +3454,7 @@ function getOperationalConfigDefinitions_() {
 
   return [
     { key: 'HORA_ENVIO', value: '15:00', description: 'Hora militar envío reportes de lunes a jueves (HH:MM)' },
+    { key: 'GOOGLE_HOLIDAY_EXCLUDED_DATES_JSON', value: '[]', description: 'Fechas de Google Calendar sin bloqueo laboral. Administrar desde Calendario.' },
     { key: 'MINUTOS_PREV_CIERRE', value: '30', description: 'Minutos antes del envío para cerrar pedidos de lunes a jueves (Mínimo 30)' },
     { key: 'HORA_ENVIO_VIERNES', value: '15:00', description: 'Hora militar envío reportes los viernes (HH:MM)' },
     { key: 'MINUTOS_PREV_CIERRE_VIERNES', value: '30', description: 'Minutos antes del envío para cerrar pedidos los viernes (Mínimo 30)' },
@@ -3661,31 +3703,84 @@ function getHolidaysList_() {
    return sh.getDataRange().getValues().slice(1)
       .filter(r => r[0])
       .map(r => {
-         try { return { date: formatDate_(new Date(r[0])), desc: r[1] }; }
+         try { return { date: formatMenuRowDate_(r[0]), desc: r[1] }; }
          catch(e) { return null; }
       })
       .filter(h => h && h.date >= formatDate_(new Date())); // Only future for list
 }
 
-function getHolidaysSet_() {
-  const cache = CacheService.getScriptCache();
-  const cachedHolidays = cache.get('HOLIDAYS_CACHE_V2');
-  if (cachedHolidays) return new Set(JSON.parse(cachedHolidays));
-
-  const set = new Set();
-  const list = getHolidaysList_(); // uses sheet
-  list.forEach(h => set.add(h.date));
-
+function getExcludedGoogleHolidayDates_() {
   try {
-    const calId = 'es.do#holiday@group.v.calendar.google.com';
-    const now = new Date();
-    const start = new Date(now.getTime() - 30 * 86400000);
-    const end = new Date(now.getTime() + 365 * 86400000);
-    CalendarApp.getCalendarById(calId).getEvents(start, end).forEach(e => set.add(formatDate_(e.getStartTime())));
-  } catch (e) {}
+    const dates = JSON.parse(getConfigValue_('GOOGLE_HOLIDAY_EXCLUDED_DATES_JSON') || '[]');
+    if (!Array.isArray(dates)) throw new Error('Se esperaba una lista de fechas.');
+    return dates.filter(date => typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date));
+  } catch (e) {
+    console.warn('Excepciones de calendario invalidas: se mantienen los bloqueos de Google.');
+    return [];
+  }
+}
 
-  cache.put('HOLIDAYS_CACHE_V2', JSON.stringify(Array.from(set)), 21600);
-  return set;
+function getGoogleHolidayData_() {
+  const key = 'GOOGLE_HOLIDAYS_V1:' + getTodayYmd_();
+  const cached = readJsonCache_(key);
+  if (cached) return cached;
+  try {
+    const calendar = CalendarApp.getCalendarById('es.do#holiday@group.v.calendar.google.com');
+    if (!calendar) throw new Error('Calendario no accesible.');
+    const start = new Date(getTodayYmd_() + 'T00:00:00');
+    const end = new Date(start); end.setFullYear(end.getFullYear() + 1);
+    const byDate = {};
+    calendar.getEvents(start, end).forEach(event => {
+      const date = formatDate_(event.getStartTime());
+      if (date < getTodayYmd_()) return;
+      if (!byDate[date]) byDate[date] = [];
+      const title = normalizeMenuText_(event.getTitle()) || 'Feriado de Google';
+      if (!byDate[date].includes(title)) byDate[date].push(title);
+    });
+    const result = { available: true, holidays: Object.keys(byDate).sort().map(date => ({ date: date, desc: byDate[date].join(' / ') })) };
+    writeJsonCache_(key, result, 300);
+    return result;
+  } catch (e) {
+    console.warn('No se pudieron consultar los feriados de Google: ' + e.message);
+    return { available: false, holidays: [] };
+  }
+}
+
+function getHolidayState_() {
+  const holidays = getHolidaysList_();
+  const calendar = getGoogleHolidayData_();
+  const excluded = new Set(getExcludedGoogleHolidayDates_());
+  const manualDates = new Set(holidays.map(h => h.date));
+  const effective = new Set(manualDates);
+  calendar.holidays.forEach(h => { if (!excluded.has(h.date)) effective.add(h.date); });
+  return {
+    holidays: holidays,
+    effectiveHolidays: Array.from(effective).sort(),
+    calendarAvailable: calendar.available,
+    calendarHolidays: calendar.holidays.slice(0, 10).map(h => Object.assign({}, h, {
+      excluded: excluded.has(h.date), manualBlocked: manualDates.has(h.date)
+    }))
+  };
+}
+
+function getAdminHolidayData_() {
+  return getHolidayState_();
+}
+
+function invalidateHolidayDataCache_() {
+  CacheService.getScriptCache().remove('HOLIDAYS_CACHE_V2');
+  bumpRevisionValue_('APP_CALENDAR_REVISION');
+  invalidateMenuDataCache_();
+  invalidateUserInitCache_();
+}
+
+function getHolidaysSet_() {
+  const key = ['HOLIDAYS_V3', getTodayYmd_(), getRevisionValue_('APP_CALENDAR_REVISION')].join(':');
+  const cached = readJsonCache_(key);
+  if (cached) return new Set(cached);
+  const state = getHolidayState_();
+  writeJsonCache_(key, state.effectiveHolidays, state.calendarAvailable ? 300 : 30);
+  return new Set(state.effectiveHolidays);
 }
 
 function getNextBusinessDay_(date) {

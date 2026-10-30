@@ -190,6 +190,9 @@ createApp({
        configList: [],
        configKeys: [],
        holidays: [],
+       effectiveHolidays: [],
+       calendarHolidays: [],
+       calendarAvailable: true,
        menuCategories: [],
        userModal: { open: false, isNew: true, data: {} },
        deptModal: { open: false, isNew: true, data: {} },
@@ -1452,6 +1455,9 @@ createApp({
                adminState.configList = res.configList || [];
                adminState.configKeys = res.configKeys || [];
                adminState.holidays = res.holidays || [];
+               adminState.effectiveHolidays = res.effectiveHolidays || [];
+               adminState.calendarHolidays = res.calendarHolidays || [];
+               adminState.calendarAvailable = res.calendarAvailable !== false;
                adminState.menuCategories = res.menuCategories || [];
                if (res.menuCategories) menuCategories.value = res.menuCategories;
 
@@ -1861,6 +1867,16 @@ createApp({
     };
 
     const processMenuImport = () => {
+       runCalendarAction('apiGetHolidays', [], () => {
+          if (!adminState.calendarAvailable) {
+             adminState.menuImportModal.error = 'No se pudo verificar Google Calendar. Reintenta antes de importar.';
+             return;
+          }
+          parseMenuImport();
+       });
+    };
+
+    const parseMenuImport = () => {
        const text = adminState.menuImportModal.text;
        const weekStart = adminState.menuImportModal.weekStart;
 
@@ -1881,7 +1897,7 @@ createApp({
        }
 
        const workingDays = [];
-       const holidaySet = new Set(adminState.holidays.map(h => h.date));
+       const holidaySet = new Set(adminState.effectiveHolidays);
 
        // Check Mon-Fri
        for(let i=0; i<5; i++) {
@@ -1958,6 +1974,10 @@ createApp({
              const day = String(d.getDate()).padStart(2, '0');
              const dStr = `${year}-${month}-${day}`;
 
+             if (holidaySet.has(dStr) && columns[i] && Object.keys(columns[i]).length) {
+                adminState.menuImportModal.error = `El ${dStr} está bloqueado en Calendario. Si se trabajará ese día, desactiva su feriado de Google o elimina el día libre manual antes de importar.`;
+                return;
+             }
              if(!holidaySet.has(dStr)) {
                 if(columns[i]) dateMapping.push({ date: dStr, items: columns[i] });
              }
@@ -2016,36 +2036,53 @@ createApp({
     };
 
     // Holiday Actions
-    const saveHoliday = () => {
-       if(!adminState.holidayModal.data.date) return showModal("La fecha es requerida.");
+    const runCalendarAction = (method, args = [], onSuccess = () => {}) => {
+       if (adminState.loading) return;
        adminState.loading = true;
-       google.script.run
+       const runner = google.script.run
          .withSuccessHandler(res => {
-            adminState.loading = false;
-            if(res.ok) {
-               adminState.holidayModal.open = false;
-               adminState.holidays.push({ date: adminState.holidayModal.data.date, desc: adminState.holidayModal.data.desc });
-               loadData(); // Refresh user view
-            }
-            else showModal(res.msg, "Error");
+            try {
+               if (!res.ok) { showModal(res.msg || 'No se pudo actualizar el calendario.', 'Error'); return; }
+               adminState.holidays = res.holidays || [];
+               adminState.effectiveHolidays = res.effectiveHolidays || [];
+               adminState.calendarHolidays = res.calendarHolidays || [];
+               adminState.calendarAvailable = res.calendarAvailable !== false;
+               onSuccess(res);
+            } finally { adminState.loading = false; }
          })
          .withFailureHandler(err => {
             adminState.loading = false;
-            showModal("Error: " + err.message, "Error");
-         })
-         .apiSaveHoliday(adminState.holidayModal.data.date, adminState.holidayModal.data.desc);
+            showModal(err.message || 'No se pudo actualizar el calendario.', 'Error');
+         });
+       runner[method](...args);
+    };
+
+    const refreshHolidays = () => runCalendarAction('apiGetHolidays');
+
+    const toggleGoogleHoliday = (holiday) => {
+       const excluded = !holiday.excluded;
+       const message = excluded
+          ? `¿Desactivar el bloqueo de Google para ${holiday.date}? Los días libres manuales y fines de semana mantienen su bloqueo.`
+          : `¿Reactivar el feriado de ${holiday.date}? Se bloquearán pedidos e importación y se cancelarán los pedidos activos de esa fecha.`;
+       showModal(message, 'Confirmar calendario', 'CONFIRM', () => {
+          runCalendarAction('apiSetGoogleHolidayExcluded', [holiday.date, excluded], () => {
+             adminState.menuImportModal.preview = [];
+             adminState.menuImportModal.step = 1;
+          });
+       });
+    };
+
+    const saveHoliday = () => {
+       if(!adminState.holidayModal.data.date) return showModal("La fecha es requerida.");
+       runCalendarAction('apiSaveHoliday', [adminState.holidayModal.data.date, adminState.holidayModal.data.desc], () => {
+          adminState.holidayModal.open = false;
+          adminState.holidayModal.data = {};
+       });
     };
 
     const deleteHoliday = (date) => {
        showModal("¿Eliminar día libre?", "Confirmar", "CONFIRM", () => {
-           adminState.loading = true;
-           google.script.run.withSuccessHandler(res => {
-               adminState.loading = false;
-               if(res.ok) {
-                  adminState.holidays = adminState.holidays.filter(h => h.date !== date);
-                  loadData();
-               }
-           }).apiDeleteHoliday(date);
+           runCalendarAction('apiDeleteHoliday', [date]);
        });
     };
 
@@ -2563,7 +2600,7 @@ createApp({
 
       // Menu/Holiday
       checkMenuDate, loadMenuDay, openMenuModal, saveMenuItem, deleteMenuItem, openCategoryManager, openCategoryModal, saveMenuCategory,
-      saveHoliday, deleteHoliday,
+      saveHoliday, deleteHoliday, refreshHolidays, toggleGoogleHoliday,
       openMenuImportModal, processMenuImport, saveWeeklyMenu,
       
       // Responsibles
